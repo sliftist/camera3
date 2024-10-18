@@ -1,0 +1,25 @@
+{
+    "name": "video-player",
+    "version": "0.1.0",
+    "main": "index.js",
+    "license": "MIT",
+    "scripts": {
+        "build": "typenode ./build.ts",
+        "watch": "typenode ./watch.ts",
+        "serve": "typenode ./serve.ts",
+        "deploy": "scp -r ./build/* quentinbrooks.com:/root/new-site/dist/video",
+        "start": "bash ./start.sh"
+    },
+    "devDependencies": {
+        "debugbreak": "^0.9.9",
+        "typedev": "^0.1.1"
+    },
+    "dependencies": {
+        "mobx": "^6.13.3",
+        "preact": "^10.24.2",
+        "socket-function": "^0.20.0",
+        "typenode": "^5.4.4",
+        "typesafecss": "^0.7.2",
+        "ws": "^8.18.0"
+    }
+}

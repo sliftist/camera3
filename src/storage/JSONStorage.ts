@@ -22,4 +22,7 @@ export class JSONStorage<T> implements IStorage<T> {
     public async getKeys(): Promise<string[]> {
         return await this.storage.getKeys();
     }
+    public async getInfo(key: string) {
+        return await this.storage.getInfo(key);
+    }
 }

@@ -3,10 +3,12 @@ import { observable } from "../misc/mobxTyped";
 import preact from "preact";
 import { css } from "typesafecss";
 import { observer } from "../misc/observer";
+import { formatTime } from "socket-function/src/formatting/format";
 
 let watchState = observable({
     pending: {} as { [group: string]: string }
 });
+let pendingLastSets = new Map<string, number>();
 
 let pendingCache = new Map<string, string>();
 
@@ -20,10 +22,22 @@ export function setPending(group: string, message: string) {
 //  delay don't show up (which is useful to reduce unnecessary pending messages).
 const setPendingBase = throttleFunction(500, function setPendingBase() {
     for (let [group, message] of pendingCache) {
-        console.log("setPending", group, message);
+
         if (!message) {
+            let lastSet = pendingLastSets.get(group);
+            if (lastSet) {
+                let duration = Date.now() - lastSet;
+                if (duration > 500) {
+                    console.log(`Finished slow task after ${formatTime(duration)}: ${JSON.stringify(group)}, last is ${JSON.stringify(watchState.pending[group])}`);
+                }
+                pendingLastSets.delete(group);
+            }
             delete watchState.pending[group];
         } else {
+            console.log("setPending", group, message);
+            if (!(group in watchState.pending)) {
+                pendingLastSets.set(group, Date.now());
+            }
             watchState.pending[group] = message;
         }
     }

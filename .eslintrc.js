@@ -1,51 +1,38 @@
 module.exports = {
-    "root": true,
-    "env": {
-        "browser": true,
-        "es6": true,
-        "node": true
+    root: true,
+    env: {
+        browser: true,
+        es6: true,
+        node: true,
     },
-    "extends": [],
-    "globals": {
-        "Atomics": "readonly",
-        "SharedArrayBuffer": "readonly"
+    extends: [],
+    globals: {
+        Atomics: "readonly",
+        SharedArrayBuffer: "readonly",
     },
-    "overrides": [
+    overrides: [
         {
-            "files": [
-                "src/**/*.ts",
-                "src/**/*.tsx"
-            ]
-        }
+            files: ["src/**/*.ts", "src/**/*.tsx"],
+        },
     ],
-    "parser": "@typescript-eslint/parser",
-    "parserOptions": {
-        "ecmaVersion": 2018,
-        "sourceType": "module",
-        "project": "./tsconfig.json",
-        "tsconfigRootDir": __dirname,
+    parser: "@typescript-eslint/parser",
+    parserOptions: {
+        ecmaVersion: 2018,
+        sourceType: "module",
+        project: "./tsconfig.json",
+        tsconfigRootDir: __dirname,
     },
-    "plugins": [
-        "@typescript-eslint"
-    ],
-    "rules": {
-        "@typescript-eslint/unbound-method": [
-            "error",
-            {
-                "ignoreStatic": true
-            }
-        ],
-        "@typescript-eslint/no-floating-promises": [
-            "error"
-        ],
-        "quotes": [
+    plugins: ["@typescript-eslint"],
+    rules: {
+        "@typescript-eslint/no-floating-promises": ["error"],
+        quotes: [
             "error",
             "double",
             {
-                "allowTemplateLiterals": true
-            }
+                allowTemplateLiterals: true,
+            },
         ],
-        "eqeqeq": "error",
-        "semi": "error"
-    }
+        eqeqeq: "error",
+        semi: "error",
+    },
 };

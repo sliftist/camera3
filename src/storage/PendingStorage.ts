@@ -20,6 +20,9 @@ export class PendingStorage<T> implements IStorage<T> {
     public async getKeys(): Promise<string[]> {
         return this.watchPending("getKeys", this.storage.getKeys());
     }
+    public async getInfo(key: string) {
+        return this.watchPending("getInfo", this.storage.getInfo(key));
+    }
 
     private watchPending<T>(type: string, promise: Promise<T>): Promise<T> {
         this.pending.set(type, (this.pending.get(type) || 0) + 1);

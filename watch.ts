@@ -43,7 +43,7 @@ function watchDir(dir: string, callback: () => void) {
 }
 
 function shouldIgnoreFile(filename: string): boolean {
-    const ignoredPaths = ["extension", ".git", "node_modules"];
+    const ignoredPaths = ["extension", ".git", "node_modules", "build"];
     return ignoredPaths.some(path => filename.includes(path));
 }
 

@@ -19,6 +19,7 @@ export class URLParamStr {
         return new URLSearchParams(window.location.search).get(this.urlKey) || "";
     }
     public set(value: string) {
+        if (value === this.get()) return;
         let searchParams = new URLSearchParams(window.location.search);
         searchParams.set(this.urlKey, value);
         window.history.pushState({}, "", "?" + searchParams.toString());

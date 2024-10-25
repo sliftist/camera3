@@ -47,6 +47,9 @@ export class DiskCollection<T> implements IStorageSync<T> {
     public getValues(): T[] {
         return this.getKeys().map(key => this.get(key)!);
     }
+    public getInfo(key: string) {
+        return this.synced.getInfo(key);
+    }
 }
 
 export class DiskCollectionPromise<T> implements IStorage<T> {
@@ -77,6 +80,9 @@ export class DiskCollectionPromise<T> implements IStorage<T> {
     public async getKeys(): Promise<string[]> {
         return await this.synced.getKeys();
     }
+    public async getInfo(key: string) {
+        return await this.synced.getInfo(key);
+    }
 }
 
 export class DiskCollectionRaw implements IStorage<Buffer> {
@@ -105,4 +111,37 @@ export class DiskCollectionRaw implements IStorage<Buffer> {
     public async getKeys(): Promise<string[]> {
         return await this.synced.getKeys();
     }
+    public async getInfo(key: string) {
+        return await this.synced.getInfo(key);
+    }
 }
+
+// TODO: Create a path version of this, which supports get and set on directories as well
+export class FileStorageBufferSyncer implements IStorageSync<Buffer> {
+    private base = new PendingStorage(`FileStorage Pending`,
+        new DelayedStorage(getFileStorage())
+    );
+    private synced = new StorageSync(this.base);
+
+    public get(key: string): Buffer | undefined {
+        return this.synced.get(key);
+    }
+    public set(key: string, value: Buffer): void {
+        this.synced.set(key, value);
+    }
+    public remove(key: string): void {
+        this.synced.remove(key);
+    }
+    public getKeys(): string[] {
+        return this.synced.getKeys();
+    }
+    public getInfo(key: string) {
+        return this.synced.getInfo(key);
+    }
+
+    public getAsync() {
+        return this.synced;
+    }
+}
+
+export const FileStorageSynced = new FileStorageBufferSyncer();

@@ -61,3 +61,8 @@ temp
 
 extension
 build
+
+*.nal
+*.img
+*.mp4
+*.jpeg

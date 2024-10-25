@@ -4,6 +4,7 @@ import { IStorage, IStorageSync } from "./IStorage";
 // Assumes it is the only writer
 export class StorageSync<T> implements IStorageSync<T> {
     cached = observable.map<string, T | undefined>();
+    infoCached = observable.map<string, { size: number; lastModified: number } | undefined>();
     keys = new Set<string>();
     synced = observable({
         keySeqNum: 0,
@@ -14,9 +15,7 @@ export class StorageSync<T> implements IStorageSync<T> {
     public get(key: string): T | undefined {
         if (!this.cached.has(key)) {
             this.cached.set(key, undefined);
-            void this.storage.get(key).then(value => {
-                this.cached.set(key, value);
-            });
+            void this.getPromise(key);
         }
         if (this.cached.get(key) === undefined) {
             this.synced.keySeqNum;
@@ -41,14 +40,56 @@ export class StorageSync<T> implements IStorageSync<T> {
     }
     private loadedKeys = false;
     public getKeys(): string[] {
-        if (!this.loadedKeys) {
-            this.loadedKeys = true;
-            void this.storage.getKeys().then(keys => {
-                this.keys = new Set(keys);
-                this.synced.keySeqNum++;
-            });
-        }
+        void this.getKeysPromise();
         this.synced.keySeqNum;
         return Array.from(this.keys);
+    }
+
+    public getInfo(key: string): { size: number; lastModified: number } | undefined {
+        if (!this.infoCached.has(key)) {
+            this.infoCached.set(key, { size: 0, lastModified: 0 });
+            void this.storage.getInfo(key).then(info => {
+                this.infoCached.set(key, info);
+            });
+        }
+        return this.infoCached.get(key);
+    }
+
+
+    public async getPromise(key: string): Promise<T | undefined> {
+        let value = this.cached.get(key);
+        if (value === undefined) {
+            value = await this.storage.get(key);
+            this.cached.set(key, value);
+        }
+        return value;
+    }
+    private pendingGetKeys: Promise<string[]> | undefined;
+    public async getKeysPromise(): Promise<string[]> {
+        if (this.pendingGetKeys) {
+            return this.pendingGetKeys;
+        }
+        if (this.loadedKeys) return Array.from(this.keys);
+        this.loadedKeys = true;
+        this.pendingGetKeys = this.storage.getKeys();
+        this.pendingGetKeys.finally(() => {
+            this.pendingGetKeys = undefined;
+        });
+        let keys = await this.pendingGetKeys;
+        if (keys.length > 0) {
+            this.keys = new Set(keys);
+            this.synced.keySeqNum++;
+        }
+        return Array.from(this.keys);
+    }
+
+    public resetKeys() {
+        this.loadedKeys = false;
+        this.synced.keySeqNum++;
+    }
+    public resetKey(key: string) {
+        this.cached.delete(key);
+        this.infoCached.delete(key);
+        this.keys.delete(key);
     }
 }

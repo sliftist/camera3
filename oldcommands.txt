@@ -1,0 +1,7 @@
+gst-launch-1.0 -e v4l2src device=/dev/video0 ! capsfilter caps="image/jpeg,width=1920,height=1080,framerate=30/1" ! jpegdec ! videoconvert ! video/x-raw,format=I420,width=1920,height=1080 ! omxh264enc ! video/x-h264,profile=high ! multifilesink location="frames_%01d.nal" next-file=key-frame
+
+// Can't run 1080p 30fps. Maybe because we're saving jpegs?
+gst-launch-1.0 -e v4l2src device=/dev/video0 ! capsfilter caps="image/jpeg,width=1920,height=1080,framerate=30/1" ! jpegdec ! tee name=t t. ! queue ! videoconvert ! video/x-raw,format=I420,width=1920,height=1080 ! omxh264enc ! video/x-h264,profile=high ! multifilesink location="/home/pi/output/frames_%03d.nal" next-file=key-frame max-files=10 t. ! queue ! videoconvert ! jpegenc ! multifilesink location="/home/pi/output/frame_%03d.jpg" max-files=60
+
+// 720p 30fps works
+gst-launch-1.0 -e v4l2src device=/dev/video0 ! capsfilter caps="image/jpeg,width=1280,height=720,framerate=30/1" ! jpegdec ! tee name=t t. ! queue ! videoconvert ! video/x-raw,format=I420,width=1280,height=720 ! omxh264enc ! video/x-h264,profile=high ! multifilesink location="/home/pi/output/frames_%03d.nal" next-file=key-frame max-files=10 t. ! queue ! videoconvert ! jpegenc ! multifilesink location="/home/pi/output/frame_%03d.jpg" max-files=60

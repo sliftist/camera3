@@ -4,11 +4,16 @@
     "main": "index.js",
     "license": "MIT",
     "scripts": {
+        "NOTE1": "bash update.sh is run to update the gstreamer command. It updates command.txt, and if the pi is setup correctly, this is all that will be needed to update the gstreamer command (which runs in a watch on the pi, writing nals to ~/output)",
+        "NOTE2": "run mount.bat to mount the file system. This is also in startup. The main terminal window can be closed, but the weird sshfs one cannot be closed.",
         "build": "typenode ./build.ts",
         "watch": "typenode ./watch.ts",
         "serve": "typenode ./serve.ts",
-        "deploy": "scp -r ./build/* quentinbrooks.com:/root/new-site/dist/video",
-        "start": "bash ./start.sh"
+        "deploy": "bash deploy.sh",
+        "xtest": "ssh 10.0.0.76 \"cd ~/camera3 && yarn typenode ./src/alwaysRunning.ts\"",
+        "test": "typenode ./test.ts",
+        "start": "bash start.sh",
+        "type": "yarn tsc --noEmit"
     },
     "devDependencies": {
         "debugbreak": "^0.9.9",
@@ -16,8 +21,9 @@
     },
     "dependencies": {
         "mobx": "^6.13.3",
+        "mp4-typescript": "^0.11.0",
         "preact": "^10.24.2",
-        "socket-function": "^0.20.0",
+        "socket-function": "^0.21.0",
         "typenode": "^5.4.4",
         "typesafecss": "^0.7.2",
         "ws": "^8.18.0"

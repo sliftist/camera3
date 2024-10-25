@@ -120,6 +120,13 @@ export class TransactionStorage implements IStorage<Buffer> {
         await this.pushAppend({ key, value: undefined, isZipped: false, time: 0 });
     }
 
+    public async getInfo(key: string): Promise<{ size: number; lastModified: number } | undefined> {
+        await this.init;
+        const value = this.cache.get(key);
+        if (!value?.value) return undefined;
+        return { size: value.value.length, lastModified: value.time };
+    }
+
     private pendingAppends: TransactionEntry[] = [];
     private extraAppends = 0;
     private pendingWrite: Promise<void> | undefined;
@@ -230,7 +237,7 @@ export class TransactionStorage implements IStorage<Buffer> {
         const fullFile = await this.rawStorage.get(filename);
         if (!fullFile) return 0;
         if (fullFile.length < 4) {
-            console.error(`Transaction in ${this.debugName} file ${filename} is too small, skipping`);
+            //console.error(`Transaction in ${this.debugName} file ${filename} is too small, skipping`);
             return 0;
         }
         let headerSize = fullFile.readUInt32LE(0);
@@ -335,7 +342,7 @@ export class TransactionStorage implements IStorage<Buffer> {
         START_BYTES.copy(buffer, offset);
         offset += START_BYTES.length;
 
-        buffer.writeUInt32LE(entry.key.length, offset);
+        buffer.writeUInt32LE(keyBuffer.length, offset);
         offset += 4;
 
         buffer.writeUInt32LE(entry.value ? entry.value.length : 0, offset);

@@ -2,9 +2,10 @@ import preact from "preact";
 import { getFileSystemPointer, storeFileSystemPointer } from "./fileSystemPointer";
 import { observable } from "../misc/mobxTyped";
 import { observer } from "../misc/observer";
-import { lazy } from "socket-function/src/caching";
-import { css } from "typesafecss";
+import { cache, lazy } from "socket-function/src/caching";
+import { css, isNode } from "typesafecss";
 import { IStorageRaw } from "./IStorage";
+import { runInSerial } from "socket-function/src/batching";
 
 let handleToId = new Map<FileSystemDirectoryHandle, string>();
 let displayData = observable({
@@ -29,12 +30,70 @@ class DirectoryPrompter extends preact.Component {
     }
 }
 
+// NOTE: Blocks until the user provides a directory
+export const getDirectoryHandle = lazy(async function getDirectoryHandle(): Promise<FileSystemDirectoryHandle> {
+    let root = document.createElement("div");
+    document.body.appendChild(root);
+    preact.render(<DirectoryPrompter />, root);
+    try {
+
+        let handle: FileSystemDirectoryHandle | undefined;
+
+        let storedId = localStorage.getItem("syncFileSystem");
+        if (storedId) {
+            let doneLoad = false;
+            setTimeout(() => {
+                if (doneLoad) return;
+                console.log("Waiting for user to click");
+                displayData.ui = "Click anywhere to allow file system access";
+            }, 500);
+            try {
+                handle = await tryToLoadPointer(storedId);
+            } catch { }
+            doneLoad = true;
+            if (handle) {
+                handleToId.set(handle, storedId);
+                return handle;
+            }
+        }
+        let fileCallback: (handle: FileSystemDirectoryHandle) => void;
+        let promise = new Promise<FileSystemDirectoryHandle>(resolve => {
+            fileCallback = resolve;
+        });
+        displayData.ui = (
+            <button
+                className={css.fontSize(40).pad2(80, 40)}
+                onClick={async () => {
+                    console.log("Waiting for user to give permission");
+                    const handle = await window.showDirectoryPicker();
+                    await handle.requestPermission({ mode: "readwrite" });
+                    let storedId = await storeFileSystemPointer({ mode: "readwrite", handle });
+                    localStorage.setItem("syncFileSystem", storedId);
+                    handleToId.set(handle, storedId);
+                    fileCallback(handle);
+                }}
+            >
+                Pick Media Directory
+            </button>
+        );
+        return await promise;
+    } finally {
+        preact.render(null, root);
+        root.remove();
+    }
+});
+
 export const getFileStorage = lazy(async function getFileStorage(): Promise<FileStorage> {
+    if (isNode()) return "No file storage in NodeJS. Is the build script running startup steps? Check for isNode() and NOOP those" as any;
     let handle = await getDirectoryHandle();
     let id = handleToId.get(handle);
     if (!id) throw new Error("Missing id for handle");
     return wrapHandle(handle, id);
 });
+export function resetStorageLocation() {
+    localStorage.removeItem("syncFileSystem");
+    window.location.reload();
+}
 
 type NestedFileStorage = {
     hasKey(key: string): Promise<boolean>;
@@ -45,7 +104,7 @@ type NestedFileStorage = {
     // Break apart back slashes to read nested paths
     readNestedPath(path: string[]): Promise<Buffer | undefined>;
     statNestedPath(path: string[]): Promise<{ size: number; lastModified: number; } | undefined>;
-    getNestedFileHandle(path: string[]): Promise<FileSystemFileHandle | undefined>;
+    getNestedFileHandle(path: string[], create?: "create"): Promise<FileSystemFileHandle | undefined>;
 };
 
 export type FileStorage = IStorageRaw & {
@@ -53,9 +112,49 @@ export type FileStorage = IStorageRaw & {
     folder: NestedFileStorage;
 };
 
+let appendQueue = cache((key: string) => {
+    return runInSerial((fnc: () => Promise<void>) => fnc());
+});
+
+
+async function fixedGetFileHandle(config: {
+    handle: FileSystemDirectoryHandle;
+    key: string;
+    create: true;
+}): Promise<FileSystemFileHandle>;
+async function fixedGetFileHandle(config: {
+    handle: FileSystemDirectoryHandle;
+    key: string;
+    create?: boolean;
+}): Promise<FileSystemFileHandle | undefined>;
+async function fixedGetFileHandle(config: {
+    handle: FileSystemDirectoryHandle;
+    key: string;
+    create?: boolean;
+}): Promise<FileSystemFileHandle | undefined> {
+    // ALWAYS try without create, because the sshfs-win sucks and doesn't support `create: true`? Wtf...
+    try {
+        return await config.handle.getFileHandle(config.key);
+    } catch {
+        if (!config.create) return undefined;
+    }
+    return await config.handle.getFileHandle(config.key, { create: true });
+}
 
 function wrapHandleFiles(handle: FileSystemDirectoryHandle): IStorageRaw {
     return {
+        async getInfo(key: string) {
+            try {
+                const file = await handle.getFileHandle(key);
+                const fileContent = await file.getFile();
+                return {
+                    size: fileContent.size,
+                    lastModified: fileContent.lastModified,
+                };
+            } catch (error) {
+                return undefined;
+            }
+        },
         async get(key: string): Promise<Buffer | undefined> {
             try {
                 const file = await handle.getFileHandle(key);
@@ -68,18 +167,20 @@ function wrapHandleFiles(handle: FileSystemDirectoryHandle): IStorageRaw {
         },
 
         async append(key: string, value: Buffer): Promise<void> {
-            // NOTE: Interesting point. Chrome doesn't optimize this to be an append, and instead
-            //  rewrites the entire file.
-            const file = await handle.getFileHandle(key, { create: true });
-            const writable = await file.createWritable({ keepExistingData: true });
-            let offset = (await file.getFile()).size;
-            await writable.seek(offset);
-            await writable.write(value);
-            await writable.close();
+            await appendQueue(key)(async () => {
+                // NOTE: Interesting point. Chrome doesn't optimize this to be an append, and instead
+                //  rewrites the entire file.
+                const file = await fixedGetFileHandle({ handle, key, create: true });
+                const writable = await file.createWritable({ keepExistingData: true });
+                let offset = (await file.getFile()).size;
+                await writable.seek(offset);
+                await writable.write(value);
+                await writable.close();
+            });
         },
 
         async set(key: string, value: Buffer): Promise<void> {
-            const file = await handle.getFileHandle(key, { create: true });
+            const file = await fixedGetFileHandle({ handle, key, create: true });
             const writable = await file.createWritable();
             await writable.write(value);
             await writable.close();
@@ -103,20 +204,34 @@ function wrapHandleFiles(handle: FileSystemDirectoryHandle): IStorageRaw {
 
 function wrapHandleNested(handle: FileSystemDirectoryHandle, id: string): NestedFileStorage {
 
-    async function getNestedFileHandle(path: string[]): Promise<FileSystemFileHandle | undefined> {
+    async function getNestedFileHandle(path: string[], create?: "create"): Promise<FileSystemFileHandle | undefined> {
         let curDir = handle;
-        for (let part of path.slice(0, -1)) {
+        //for (let part of path.slice(0, -1)) {
+        for (let i = 0; i < path.length - 1; i++) {
+            let part = path[i];
             if (!part) continue;
             try {
+                // NOTE: We don't create directories here, because if the final file isn't found,
+                //  we don't want to create the directory structure.
                 curDir = await curDir.getDirectoryHandle(part, { create: false });
             } catch {
+                // Create dir and file
+                if (create) {
+                    for (let j = i; j < path.length - 1; j++) {
+                        let part = path[j];
+                        if (!part) continue;
+                        curDir = await curDir.getDirectoryHandle(part, { create: true });
+                    }
+                    return curDir.getFileHandle(path.at(-1)!, { create: true });
+                }
                 return undefined;
             }
         }
 
         try {
-            return await curDir.getFileHandle(path.at(-1)!, { create: false });
-        } catch {
+            return await fixedGetFileHandle({ handle: curDir, key: path.at(-1)!, create: !!create });
+        } catch (e) {
+            console.error("getNestedFileHandle", e);
             return undefined;
         }
     }
@@ -191,64 +306,6 @@ function wrapHandle(handle: FileSystemDirectoryHandle, id: string): FileStorage 
     };
 }
 
-// NOTE: Blocks until the user provides a directory
-export const getDirectoryHandle = lazy(async function getDirectoryHandle(): Promise<FileSystemDirectoryHandle> {
-    let root = document.createElement("div");
-    document.body.appendChild(root);
-    preact.render(<DirectoryPrompter />, root);
-    try {
-
-        let handle: FileSystemDirectoryHandle | undefined;
-
-        let storedId = localStorage.getItem("syncFileSystem");
-        if (storedId) {
-            let doneLoad = false;
-            setTimeout(() => {
-                if (doneLoad) return;
-                console.log("Waiting for user to click");
-                displayData.ui = "Click anywhere to allow file system access";
-            }, 500);
-            try {
-                handle = await tryToLoadPointer(storedId);
-            } catch { }
-            doneLoad = true;
-            if (handle) {
-                handleToId.set(handle, storedId);
-                return handle;
-            }
-        }
-        let fileCallback: (handle: FileSystemDirectoryHandle) => void;
-        let promise = new Promise<FileSystemDirectoryHandle>(resolve => {
-            fileCallback = resolve;
-        });
-        displayData.ui = (
-            <button
-                className={css.fontSize(40).pad2(80, 40)}
-                onClick={async () => {
-                    console.log("Waiting for user to give permission");
-                    const handle = await window.showDirectoryPicker();
-                    await handle.requestPermission({ mode: "readwrite" });
-                    let storedId = await storeFileSystemPointer({ mode: "readwrite", handle });
-                    localStorage.setItem("syncFileSystem", storedId);
-                    handleToId.set(handle, storedId);
-                    fileCallback(handle);
-                }}
-            >
-                Pick Media Directory
-            </button>
-        );
-        return await promise;
-    } finally {
-        preact.render(null, root);
-        root.remove();
-    }
-});
-
-export function resetDirectory() {
-    localStorage.removeItem("syncFileSystem");
-    window.location.reload();
-}
-
 async function tryToLoadPointer(pointer: string) {
     let result = await getFileSystemPointer({ pointer });
     if (!result) return;
@@ -256,164 +313,3 @@ async function tryToLoadPointer(pointer: string) {
     if (!handle) return;
     return handle as FileSystemDirectoryHandle;
 }
-
-
-/*
-import preact from "preact";
-import { observer } from "./observer";
-import { observable } from "mobx";
-import { deleteFileSystemPointer, getFileSystemPointer, storeFileSystemPointer } from "./fileSystemPointer";
-import { delay } from "socket-function/src/batching";
-
-
-let cachedFiles = observable({} as {
-    [path: string]: {
-        loaded?: boolean;
-        watching?: boolean;
-        value?: Buffer;
-        watchStat?: number;
-    }
-});
-let cachedDirs = observable({} as {
-    [path: string]: {
-        loaded?: boolean;
-        watching?: boolean;
-        value?: string;
-    }
-});
-
-export async function writeFile(path: string, contents: Buffer) {
-    if (!currentDirectory.directory) throw new Error("Directory not set");
-    let pathParts = path.split("/");
-    let curDir = currentDirectory.directory;
-    for (let i = 0; i < pathParts.length - 1; i++) {
-        let part = pathParts[i];
-        if (part === ".") continue;
-        let nextDir = await curDir.getDirectoryHandle(part, { create: true });
-        curDir = nextDir;
-    }
-    let file = await curDir.getFileHandle(pathParts.at(-1)!, { create: true });
-    let writable = await file.createWritable();
-    await writable.write(contents);
-    await writable.close();
-}
-
-export function getFile(path: string): Buffer | undefined {
-    if (!currentDirectory.directory) return undefined;
-    if (!cachedFiles[path]) {
-        cachedFiles[path] = {};
-        void loadFile(path);
-    }
-    return cachedFiles[path].value;
-}
-export async function getFilePromise(path: string): Promise<Buffer | undefined> {
-    if (!currentDirectory.directory) return undefined;
-    if (!cachedFiles[path]) {
-        cachedFiles[path] = {};
-        await loadFile(path);
-    }
-    return cachedFiles[path].value;
-}
-export function watchFile(path: string): Buffer | undefined {
-    if (!currentDirectory.directory) return undefined;
-    let result = getFile(path);
-    // TODO: Unwatch files as well?
-    if (!cachedFiles[path].watching) {
-        cachedFiles[path].watching = true;
-        void runFilePoll(path);
-    }
-    return result;
-}
-export function watchDirectory(path: string): string[] {
-    if (!currentDirectory.directory) return [];
-    if (!cachedDirs[path]) {
-        cachedDirs[path] = {};
-    }
-    if (!cachedDirs[path].watching) {
-        cachedDirs[path].watching = true;
-        void runDirPoll(path);
-    }
-    return cachedDirs[path].value?.split("|") || [];
-}
-
-async function runFilePoll(path: string) {
-    const dir = currentDirectory.directory;
-    if (!dir) throw new Error("Directory not set");
-    while (true) {
-        await new Promise(resolve => setTimeout(resolve, 350));
-        let lastStat = await dir.getFileHandle(path, {}).catch(() => undefined);
-        let file = await lastStat?.getFile();
-        let lastModified = file?.lastModified;
-        if (cachedFiles[path].watchStat !== lastModified) {
-            await loadFile(path);
-            cachedFiles[path].watchStat = lastModified;
-        }
-    }
-}
-
-async function loadFile(path: string) {
-    const dir = currentDirectory.directory;
-    if (!dir) throw new Error("Directory not set");
-
-    let pathParts = path.split("/");
-    let curDir = dir;
-
-    try {
-        for (let i = 0; i < pathParts.length - 1; i++) {
-            let part = pathParts[i];
-            if (part === ".") continue;
-            let nextDir = await curDir.getDirectoryHandle(part, { create: true });
-            curDir = nextDir;
-        }
-        let file = await curDir.getFileHandle(pathParts.at(-1)!, { create: false });
-        let fileContents = await file.getFile();
-        let buffer = await fileContents.arrayBuffer();
-        cachedFiles[path].value = Buffer.from(buffer);
-    } catch (e) {
-        cachedFiles[path].value = undefined;
-    }
-    cachedFiles[path].loaded = true;
-}
-
-
-async function runDirPoll(path: string) {
-    const dir = currentDirectory.directory;
-    if (!dir) throw new Error("Directory not set");
-    while (true) {
-        await loadDir(path);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-}
-
-async function loadDir(path: string) {
-    const dir = currentDirectory.directory;
-    if (!dir) throw new Error("Directory not set");
-
-    let pathParts = path.split("/");
-    let curDir = dir;
-
-    try {
-        for (let i = 0; i < pathParts.length; i++) {
-            let part = pathParts[i];
-            if (part === ".") continue;
-            let nextDir = await curDir.getDirectoryHandle(part, { create: true });
-            curDir = nextDir;
-        }
-        let newParts: string[] = [];
-        for await (let [name, value] of curDir) {
-            newParts.push(name);
-        }
-        let newDir = newParts.join("|");
-        if (newDir !== cachedDirs[path].value) {
-            cachedDirs[path].value = newDir;
-        }
-    } catch (e) {
-        cachedDirs[path].value = undefined;
-    }
-    cachedDirs[path].loaded = true;
-
-    return cachedDirs[path].value;
-}
-
-
-*/

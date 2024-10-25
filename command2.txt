@@ -1,0 +1,1 @@
+node -r ./node_modules/typenode/index.js ./src/fix.ts

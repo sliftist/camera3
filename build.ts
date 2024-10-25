@@ -1,3 +1,4 @@
+import debugbreak from "debugbreak";
 import "./src/main";
 import fs from "fs";
 
@@ -106,7 +107,7 @@ async function build() {
     }
 
     let end = Date.now();
-    console.log(`Built in ${end - time}ms at ${new Date().toLocaleTimeString()}`);
+    console.log(`Copied ${pathsToCopy.length} in ${end - time}ms at ${new Date().toLocaleTimeString()}`);
 }
 
 
@@ -216,13 +217,17 @@ function createImport(config: {
 
 
     if (!modulePath.startsWith(".")) {
-
         let fullPath = require.resolve(modulePath);
-        let relativePath = fullPath.replace(__dirname, ".");
-        modulePath = relativePath.replaceAll("\\", "/");
-        let depth = path.split("/").length - 3;
-        if (depth > 0) {
-            modulePath = "../".repeat(depth) + modulePath;
+        if (!fullPath.includes(".")) {
+            // It's a built-in module, So... remove it/
+            return ``;
+        } else {
+            let relativePath = fullPath.replace(__dirname, ".");
+            modulePath = relativePath.replaceAll("\\", "/");
+            let depth = path.split("/").length - 3;
+            if (depth > 0) {
+                modulePath = "../".repeat(depth) + modulePath;
+            }
         }
     }
     if (modulePath.endsWith(".ts") || modulePath.endsWith(".tsx")) {

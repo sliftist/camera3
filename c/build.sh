@@ -1,0 +1,14 @@
+g++ -o main main.cpp \
+  -I/usr/include/libcamera \
+  -I/usr/include/interface/mmal \
+  -I/opt/vc/include/interface/mmal \
+  -I/usr/include/interface/mmal/util \
+  -I/usr/include/interface/vcos/pthreads \
+  -I/usr/include/interface/vmcs_host/linux \
+  -L/opt/vc/lib \
+  -lmmal -lmmal_core -lmmal_util -lbcm_host \
+  -ljpeg \
+  -lcamera \
+  -lstdc++ \
+  -pthread \
+  -std=c++17

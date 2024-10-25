@@ -18,4 +18,8 @@ export class DelayedStorage<T> implements IStorage<T> {
         const storage = await this.storage;
         return storage.getKeys();
     }
+    public async getInfo(key: string) {
+        const storage = await this.storage;
+        return storage.getInfo(key);
+    }
 }

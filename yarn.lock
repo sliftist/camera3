@@ -973,10 +973,10 @@ mobx@^6.13.3, mobx@^6.6.2:
   resolved "https://registry.yarnpkg.com/mobx/-/mobx-6.13.3.tgz#27f6171125fd4f737daec940c1d199c479f1b8c5"
   integrity sha512-YtAS+ZMbdpbHYUU4ESht3na8KiX11KuMT1yOiKtbKlQ0GZkHDYPKyEw/Tdp7h7aHyLrTWj2TBaSNJ6bCr638iQ==
 
-mp4-typescript@^0.11.0:
-  version "0.11.0"
-  resolved "https://registry.yarnpkg.com/mp4-typescript/-/mp4-typescript-0.11.0.tgz#34dba45533c8bd3a41f4e4193296d304eda43344"
-  integrity sha512-h9pKNPMOx+q47IaCpQqGwGyrXIXLyeCDHPCAyTMp2oXaSkxlI0nD7/97tulrX3kCyIgZ+Mw1ETbNfEIqHLHGqw==
+mp4-typescript@^0.14.0:
+  version "0.14.0"
+  resolved "https://registry.yarnpkg.com/mp4-typescript/-/mp4-typescript-0.14.0.tgz#7bc50fc8bbb3695d80a9b11dc61a5f9bdc53e7f9"
+  integrity sha512-DPfM1VEh/ovPo0tZSc+OklYMqv00H1pXQLgMGYoINOq/tBM1EJ5wk0DP3YouK+jAnk0Sgn59ZLJRgNKjDt8HxA==
   dependencies:
     pchannel "^0.4.5"
     typenode "^0.5.1"
@@ -1298,10 +1298,10 @@ typenode@^5.4.1, typenode@^5.4.4:
     source-map-support "https://github.com/7rulnik/node-source-map-support"
     typescript "5.3.3"
 
-typesafecss@^0.7.2:
-  version "0.7.2"
-  resolved "https://registry.yarnpkg.com/typesafecss/-/typesafecss-0.7.2.tgz#ba8f3f534802410bfef1d8784fea95d4ebb8844f"
-  integrity sha512-TY3wB1OJUITjwgkDw1qP2uEgOcKIkEkK1CeJnrEsQxMWrB3aE724jkB7Cqo9XgD5b1ayCgDmsaxGWHziB1Fviw==
+typesafecss@^0.9.0:
+  version "0.9.0"
+  resolved "https://registry.yarnpkg.com/typesafecss/-/typesafecss-0.9.0.tgz#fed14792e82fdf23f8145ca8eff7b1407f684817"
+  integrity sha512-L6aN+Cg+hhgTJ+MKwMhA/TcS8YSB7HxhJgQdHAa5kwIsOV3zlTR7U8ZfEsFj/ciP3yLUX71EwKyC9+iTB7hRZg==
 
 typescript@5.3.3:
   version "5.3.3"

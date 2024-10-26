@@ -4,6 +4,7 @@ import { PromiseObj, sort, throttleFunction } from "socket-function/src/misc";
 import { runInSerial } from "socket-function/src/batching";
 import { H264toMP4 } from "mp4-typescript";
 import { decodeVideoKey } from "./videoHelpers";
+import { formatNumber } from "socket-function/src/formatting/format";
 
 export type VideoInfo = {
     file: string;
@@ -11,6 +12,7 @@ export type VideoInfo = {
     time: number;
     frames: number;
     keyFrames: number;
+    size: number;
 
     // Maybe not the real durations, but it's our best guess
     duration: number;
@@ -87,12 +89,6 @@ export class VideoManager {
         };
 
         let events = ["play", "pause", "ended", "seeking", "seeked", "waiting", "timeupdate", "playing", "canplay", "canplaythrough", "error"];
-        for (let event of events) {
-            video.addEventListener(event, () => {
-                //console.log("Video event", event);
-                updatePlayStates();
-            });
-        }
 
         let didSeekedCount = 0;
         let jumpGap = throttleFunction(1000, async () => {
@@ -115,6 +111,18 @@ export class VideoManager {
             this.inAutoPlayback = true;
         });
         video.addEventListener("seeking", () => this.onSeekingVideo(this.getCurrentPlayTime()));
+        video.addEventListener("play", () => {
+            if (!this.baseTime) {
+                void this.seekToTime(this.state.curPlayingTime);
+            }
+        });
+
+        for (let event of events) {
+            video.addEventListener(event, () => {
+                console.log("Video event", event);
+                updatePlayStates();
+            });
+        }
     }
 
     /** Returns the real time (ex, new Date() works on it) of the current playing position */
@@ -244,6 +252,7 @@ export class VideoManager {
         if (!cached) {
             console.log("Loading video", file);
             let promise = (async (): Promise<VideoInfo> => {
+                let startLoadTime = Date.now();
                 let buffer = await this.config.getVideoBuffer(file);
                 if (!buffer) {
                     console.error("No buffer for video, skipping", file);
@@ -253,8 +262,10 @@ export class VideoManager {
                         frames: 0,
                         keyFrames: 0,
                         duration: 0,
+                        size: 0,
                     };
                 }
+
                 try {
                     let info = decodeVideoKey(file);
                     let frameDurationInSeconds = info ? (info.endTime - info.time) / info.frames / 1000 : 1 / 30;
@@ -264,10 +275,15 @@ export class VideoManager {
                         mediaStartTimeSeconds: (startTime - this.baseTime) / 1000,
                     });
 
+
                     this.state.loadedFrames += frameCount;
                     this.state.loadedBytes += buffer.byteLength;
                     this.state.loadedFiles++;
                     sourceBuffer.appendBuffer(mp4Buffer);
+
+                    if (info && info.frames !== frameCount) {
+                        console.warn(`Expected ${info.frames} frames, but got ${frameCount} frames`);
+                    }
 
                     let p = new PromiseObj();
                     sourceBuffer.addEventListener("updateend", p.resolve as any);
@@ -275,7 +291,8 @@ export class VideoManager {
                     sourceBuffer.removeEventListener("updateend", p.resolve as any);
                     let duration = info ? info.endTime - info.time : 0;
 
-                    console.log("Loaded video", file, startTime, "duration", duration);
+                    let loadTime = Date.now() - startLoadTime;
+                    console.log("Loaded video in", loadTime, `${formatNumber(buffer.length / loadTime * 1000)}B/s`, file, startTime, "duration", duration);
 
                     return {
                         file,
@@ -283,6 +300,7 @@ export class VideoManager {
                         frames: frameCount,
                         keyFrames: keyFrameCount,
                         duration: duration,
+                        size: buffer.byteLength,
                     };
                 } catch (e) {
                     console.error("Error loading video, assuming it is 0 length", file, e);
@@ -297,6 +315,7 @@ export class VideoManager {
                         frames: 0,
                         keyFrames: 0,
                         duration: 0,
+                        size: 0,
                     };
                 }
             })();
@@ -356,5 +375,19 @@ export class VideoManager {
             videos.push(info);
         }
         return videos;
+    }
+
+    public getPlayState() {
+        if (this.state.isPlaying) return "Playing" as const;
+        if (this.state.wantsToPlay) return "Buffering" as const;
+        return "Paused" as const;
+    }
+
+    public async togglePlay() {
+        if (this.state.wantsToPlay) {
+            await this.playVideoTime(this.getCurrentPlayTime());
+        } else {
+            await this.seekToTime(this.getCurrentPlayTime());
+        }
     }
 }

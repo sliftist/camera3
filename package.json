@@ -21,11 +21,11 @@
     },
     "dependencies": {
         "mobx": "^6.13.3",
-        "mp4-typescript": "^0.11.0",
+        "mp4-typescript": "^0.14.0",
         "preact": "^10.24.2",
         "socket-function": "^0.21.0",
         "typenode": "^5.4.4",
-        "typesafecss": "^0.7.2",
+        "typesafecss": "^0.9.0",
         "ws": "^8.18.0"
     }
 }

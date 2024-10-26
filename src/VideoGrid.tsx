@@ -9,23 +9,26 @@ import { getFileStorage } from "./storage/FileFolderAPI";
 import { getLiveVideos } from "./videoHelpers";
 import { formatNumber, formatTime } from "socket-function/src/formatting/format";
 import { DiskCollectionRaw } from "./storage/DiskCollection";
+import { Button } from "./Button";
+import { list } from "socket-function/src/misc";
+import { Icon } from "./icons";
 
-const incrementType = new URLParamStr("inc");
-
-let test = new DiskCollectionRaw("test");
+const incrementTypeURL = new URLParamStr("inc");
 
 @observer
 export class VideoGrid extends preact.Component<{
     videoManager: VideoManager;
 }> {
     synced = observable({
-        //expanded: false,
+        expanded: false,
     });
     render() {
         let videoManager = this.props.videoManager;
         let state = videoManager.state;
-        let inc: IncrementType = incrementType.value as any || "day";
-        let subRanges = getIncrementSubRanges(state.curPlayingTime, inc);
+        let currentIncrement: IncrementType = incrementTypeURL.value as any || "day";
+        let subIncrement = incrementSubs[currentIncrement].subType;
+        let currentTime = state.curPlayingTime;
+        let subRanges = getIncrementSubRanges(currentTime, currentIncrement);
 
         let videos = getLiveVideos();
         type Video = typeof videos[0];
@@ -46,95 +49,193 @@ export class VideoGrid extends preact.Component<{
             videoLookup.set(subRange, matchingVideos);
         }
 
-        /*
-        todonext
-        - Overview control
-            - Rendered as preview buttons above video AND THEN clicking expands it
-            - Render at the real aspect ratio
-            - Copy the video-player thumbnail cache function
-            - Preview shows various times in the past (past hour, past day, etc)
-                - Put the text over the thumbnail, as the text is the most important, and the thumbnail probably won't be useful right now (as it'll always be the same)
-            - Each thumbnail links to the start of that period
-            - Main grid is just thumbnail
-                - Tightly fitting, via measuring our size with a div measurer
-            - Clicking on thumbnail plays it, and closes the overview
-                - Buttons underneath
-                    - Zoom in
-                    - Play (but not close overview)
-            - Click on large buttons on either side to go forward or back (not adding video, just jumping time periods)
-            - Button to close it (back down to preview)
-            - Button to zoom out (keeping the video centered)
-            - Indicate if the current time is in a block OR before/after
-            - Button to go to the present
-            - Indicator on either side which time we are playing live, and the present
-        */
-
-        return (
-            <div className={css.vbox(10).pad2(10)}>
-                <button onClick={async () => {
-                    let data = Buffer.alloc(1024 * 10);
-                    for (let i = 0; i < data.length; i++) {
-                        data[i] = Math.random() * 256;
-                    }
-                    await test.set("test", data);
-
-                    /*
-                    //todonext
-                    //  I fixed the FS issues. So... we SHOULD be able to use getThumbnailURL again... maybe?
-
-                    let fileStorage = await getFileStorage();
-                    // let handle = await fileStorage.folder.getNestedFileHandle(["test", "newfile3"], "create");
-                    // if (!handle) throw new Error("Handle not found");
-                    // // Write using handle
-                    // let writable = await handle.createWritable();
-                    // await writable.write("test" + Date.now());
-                    // await writable.close();
-
-
-                    // Test getNestedFileHandle with creating folders
-
-
-                    let homeFolder = await fileStorage.folder.getStorage("test");
-                    //await homeFolder.set("newfile", Buffer.from("test" + Date.now()));
-                    await homeFolder.append("test2.txt", Buffer.from("test" + Date.now()));
-                    */
-
-                    //todonext
-                    //  Write's aren't supported
-                    //await testDir.set("test.txt", Buffer.from("test"));
-                    //await testDir.append("test.txt", Buffer.from("test"));
-                }}>
-                    test
-                </button>
-                <div>
-                    <select value={inc} onChange={e => incrementType.value = e.currentTarget.value as any}>
-                        {renderIncrements.map(inc => <option value={inc}>{inc}</option>)}
-                    </select>
-                </div>
-                <div>
-                    {subRanges.mainTitle}
+        if (!this.synced.expanded) {
+            let overviewIncrement = "day" as const;
+            let previewRanges = getIncrementSubRanges(currentTime, overviewIncrement);
+            let centerIndex = previewRanges.ranges.findIndex(range => range.start <= currentTime && currentTime < range.end);
+            if (centerIndex >= 0) {
+                let startIndex = Math.max(0, centerIndex - 2);
+                let endIndex = Math.min(previewRanges.ranges.length, centerIndex + 3);
+                previewRanges.ranges = previewRanges.ranges.slice(startIndex, endIndex);
+            }
+            return (
+                <div className={css.relative.vbox(10).pad2(10).margins2(10).width(`calc(100% - 20px)`).bord2(0, 0, 20, 1).center}>
                     <div className={css.hbox(10).wrap}>
-                        {subRanges.ranges.slice(-1).map(range => {
-                            let thumb = getThumbnailURL({ time: range.start, maxDimension: 200, retryErrors: true });
+                        {previewRanges.ranges.map(range => {
+                            let thumb = getThumbnailURL({ startTime: range.start, endTime: range.end, maxDimension: 200, retryErrors: true });
+                            if (!thumb.startsWith("data:")) return undefined;
+                            let isCenter = range.start <= currentTime && currentTime < range.end;
                             return (
-                                <div className={css.size(160, 160).vbox0.bord(1, "white").relative}>
-                                    {thumb.startsWith("data:") &&
-                                        <img
-                                            className={css.pos(0, 0).fillBoth.absolute.objectFit("cover")}
-                                            src={thumb}
-                                        /> || undefined
+                                <div
+                                    className={
+                                        css.bord(1, "white").relative.minWidth(100).minHeight(100)
+                                        + (isCenter && css.borderColor("hsl(103, 90%, 73%)", "important"))
                                     }
-                                    <div className={css.vbox(4).hsla(0, 0, 20, 0.5).pad2(4).relative}>
-                                        {formatFullIncrement(range.start, incrementSubs[inc].subType)}
-                                        <span>{formatNumber(videoLookup.get(range)?.length)} segments</span>
-                                        <span>{formatNumber(videoLookup.get(range)?.map(x => x.frames).reduce((a, b) => a + b, 0))} frames</span>
-                                        <span>{formatTime(videoLookup.get(range)?.map(x => x.endTime - x.time).reduce((a, b) => a + b, 0))}</span>
-                                        todonext;
-                                    // Show green highlight bar on top for % of time filled, and right align time, and remove the rest of the text
+                                >
+                                    <img
+                                        className={css.pos(0, 0).maxWidth(300).maxHeight(300)}
+                                        src={thumb}
+                                    />
+                                    <div className={css.hsla(0, 0, 20, 0.65).pad2(6, 4).relative.absolute.top0.left0}>
+                                        {formatSingleIncrement(range.start, incrementSubs[overviewIncrement].subType)}
                                     </div>
                                 </div>
                             );
                         })}
+                    </div>
+                    <div
+                        className={css.absolute.pos(0, 0).fillBoth.background("hsl(0, 0%, 50%)", "hover").opacity(0.3).pointer}
+                        onClick={() => {
+                            this.synced.expanded = true;
+                            incrementTypeURL.value = overviewIncrement;
+                        }}
+                    />
+                </div>
+            );
+        }
+
+        return (
+            <div className={css.vbox(10).pad2(10).margins2(10).width(`calc(100% - 20px)`).bord2(0, 0, 20, 1)}>
+                <div className={css.hbox(20).fillWidth}>
+                    <div
+                        className={
+                            css.size(50, "100%").center
+                                .vbox(10)
+                                .textAlign("center")
+                                .hsl(0, 0, 5).background("hsl(0, 0%, 15%)", "hover", "important")
+                                .pointer
+                                .colorhsl(0, 0, 70)
+                                .pad2(0, 10)
+                        }
+                        onClick={() => state.curPlayingTime = getPrevIncrement(currentTime, currentIncrement)}
+                    >
+                        {Icon.chevronDoubleLeft()}
+                        <div className={css.marginAuto} />
+                        {formatSingleIncrement(getPrevIncrement(currentTime, currentIncrement), currentIncrement)}
+                        <div className={css.marginAuto} />
+                        {Icon.chevronDoubleLeft()}
+                    </div>
+                    <div className={css.vbox(20).fillWidth}>
+                        <div className={
+                            css.display("grid")
+                                .gridTemplateColumns("1fr 2fr 1fr")
+                                .fillWidth
+                        }>
+                            <div className={css.fillWidth.hbox(10)}>
+                                <b>Time Breakdown</b>
+                                {renderIncrements.map(inc =>
+                                    <Button
+                                        lightness={inc === currentIncrement ? 10 : -30}
+                                        onClick={() => incrementTypeURL.value = inc}
+                                        invertHover={inc !== currentIncrement}
+                                    >
+                                        {inc}
+                                    </Button>
+                                )}
+                            </div>
+                            <div className={css.fillWidth.hbox(10).justifyContent("center")}>
+                                <div className={css.hbox(10).fontSize(30)}>
+                                    {formatFullIncrementParts(currentTime, currentIncrement, "long").map(part =>
+                                        <Button onClick={() => incrementTypeURL.value = part.type}>
+                                            <div className={css.hbox(5)}>
+                                                {part.value}
+                                                {Icon.chevronDown()}
+                                            </div>
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+                            <div className={css.fillWidth.vbox(20).justifyContent("end")}>
+
+                            </div>
+                        </div>
+                        <div className={css.hbox(10).wrap}>
+                            {subRanges.ranges.map(range => {
+                                let thumb = getThumbnailURL({ startTime: range.start, endTime: range.end, maxDimension: 200, retryErrors: true });
+                                let rangeRange = range.end - range.start;
+                                let ranges = videoLookup.get(range) || [];
+                                let joinGap = rangeRange * 0.001;
+                                for (let i = ranges.length - 1; i >= 1; i--) {
+                                    if ((ranges[i].time - ranges[i - 1].endTime) < joinGap) {
+                                        ranges[i - 1].endTime = ranges[i].endTime;
+                                        ranges.splice(i, 1);
+                                    }
+                                }
+                                // Clamp ranges to range.start/range.end
+                                for (let r of ranges) {
+                                    r.time = Math.max(r.time, range.start);
+                                    r.endTime = Math.min(r.endTime, range.end);
+                                }
+                                let isCenter = range.start <= currentTime && currentTime < range.end;
+                                return (
+                                    <div
+                                        className={
+                                            css.bord(1, "white").relative.minWidth(100).minHeight(100)
+                                                .pointer
+                                            + (isCenter && css.borderColor("hsl(103, 90%, 73%)", "important"))
+                                        }
+                                        title={`${formatFullIncrement(range.start, subIncrement, "long")} - ${formatFullIncrement(range.end, subIncrement, "long")}`}
+                                        onClick={() => videoManager.seekToTime(range.start)}
+                                        {...{
+                                            onAuxClick: (e: preact.JSX.TargetedMouseEvent<HTMLAnchorElement>) => {
+                                                e.preventDefault();
+                                                incrementTypeURL.value = subIncrement;
+                                            },
+                                        }}
+                                    >
+                                        {thumb.startsWith("data:") &&
+                                            <img
+                                                className={css.pos(0, 0).maxWidth(300).maxHeight(300)}
+                                                src={thumb}
+                                            /> || undefined
+                                        }
+                                        <div className={css.hsla(0, 0, 20, 0.65).pad2(6, 4).relative.absolute.top0.left0}>
+                                            {formatSingleIncrement(range.start, subIncrement)}
+                                        </div>
+                                        {ranges.map(r => <div className={
+                                            css.absolute
+                                                .top0.height(4)
+                                                .left(`${(r.time - range.start) / rangeRange * 100}%`)
+                                                .width(`${(r.endTime - r.time) / rangeRange * 100}%`)
+                                                .offsety("-100%")
+                                                .hsl(103, 90, 73)
+                                        } />)}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div
+                            className={
+                                css.size("100%", 50).center
+                                    .hbox(10)
+                                    .textAlign("center")
+                                    .hsl(0, 0, 5).background("hsl(0, 0%, 15%)", "hover", "important")
+                                    .pointer
+                                    .colorhsl(0, 0, 70)
+                                    .pad2(10, 0)
+                            }
+                            onClick={() => this.synced.expanded = false}
+                        >
+                            {Icon.chevronDoubleUp()}
+                        </div>
+                    </div>
+                    <div
+                        className={
+                            css.size(50, "100%").center
+                                .vbox(10)
+                                .textAlign("center")
+                                .hsl(0, 0, 5).background("hsl(0, 0%, 15%)", "hover", "important")
+                                .pointer
+                                .colorhsl(0, 0, 70)
+                                .pad2(0, 10)
+                        }
+                        onClick={() => state.curPlayingTime = getNextIncrement(currentTime, currentIncrement)}
+                    >
+                        {Icon.chevronDoubleRight()}
+                        <div className={css.marginAuto} />
+                        {formatSingleIncrement(getNextIncrement(currentTime, currentIncrement), currentIncrement)}
+                        <div className={css.marginAuto} />
+                        {Icon.chevronDoubleRight()}
                     </div>
                 </div>
             </div>
@@ -143,7 +244,7 @@ export class VideoGrid extends preact.Component<{
 }
 
 type IncrementType = "second" | "minute" | "minute2" | "hour" | "hour6" | "day" | "week" | "week2" | "month" | "year";
-let renderIncrements: IncrementType[] = ["second", "minute", "hour", "day", "week", "month", "year"];
+let renderIncrements: IncrementType[] = ["year", "month", "week", "day", "hour", "minute", "second"];
 let incrementSubs: {
     [key in IncrementType]: { type: IncrementType; subType: IncrementType; }
 } = {
@@ -179,7 +280,7 @@ function getStartOfIncrement(time: number, type: IncrementType): number {
         d.setSeconds(0);
         d.setMilliseconds(0);
     } else if (type === "hour6") {
-        d.setHours((d.getHours() / 6) * 6);
+        d.setHours(Math.floor(d.getHours() / 6) * 6);
         d.setMinutes(0);
         d.setSeconds(0);
         d.setMilliseconds(0);
@@ -242,6 +343,28 @@ function getNextIncrement(time: number, type: IncrementType): number {
     time += incrementMedianSize(type) * 1.5;
     return getStartOfIncrement(time, type);
 }
+function getPrevIncrement(time: number, type: IncrementType): number {
+    time = getStartOfIncrement(time, type);
+    time--;
+    return getStartOfIncrement(time, type);
+}
+function hourShort(time: number): string {
+    // 12 PM
+    let d = new Date(time);
+    let hours = d.getHours();
+    let ampm = hours < 12 ? "AM" : "PM";
+    hours = hours % 12;
+    if (hours === 0) hours = 12;
+    return `${hours} ${ampm}`;
+}
+function timeOfDayTime(time: number): string {
+    let hours = new Date(time).getHours();
+    if (hours === 0) return "🌑"; //return "Midnight"; 🌃
+    if (hours === 6) return "🌅"; //return "Morning";
+    if (hours === 12) return "☀️"; //return "Noon";
+    if (hours === 18) return "🌇"; // return "Evening";
+    return hourShort(time);
+}
 function hourMinuteSecond(time: number): string {
     // 12:00:00 PM
     let d = new Date(time);
@@ -253,64 +376,74 @@ function hourMinuteSecond(time: number): string {
     if (hours === 0) hours = 12;
     return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")} ${ampm}`;
 }
-function formatSingleIncrement(time: number, type: IncrementType): string {
+let shortDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+let longDays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+let shortMonths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+let longMonths = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function formatSingleIncrement(time: number, type: IncrementType, long?: "long"): string {
     time = getStartOfIncrement(time, type);
     let d = new Date(time);
-    function p(x: number) { return x.toString().padEnd(2, "0"); }
+    let days = long ? longDays : shortDays;
+    let months = long ? longMonths : shortMonths;
     if (type === "second") return hourMinuteSecond(time);
     if (type === "minute") return hourMinuteSecond(time);
     if (type === "minute2") return formatSingleIncrement(time, "minute");
     if (type === "hour") return hourMinuteSecond(time);
-    if (type === "hour6") return formatSingleIncrement(time, "hour");
-    if (type === "day") return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + " " + d.getDate();
+    if (type === "hour6") {
+        return d.getDate() + " " + days[d.getDay()] + " " + timeOfDayTime(time);
+    }
+    if (type === "day") return d.getDate() + " " + days[d.getDay()];
     // Month - Day
-    if (type === "week") return formatFullIncrement(time, "month") + " " + formatSingleIncrement(time, "day");
+    if (type === "week") return formatFullIncrement(time, "month") + " " + d.getDate();
     if (type === "week2") return formatSingleIncrement(time, "week");
-    if (type === "month") return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+    if (type === "month") return months[d.getMonth()];
     if (type === "year") return d.getFullYear() + "";
     let unhandled: never = type;
     throw new Error("Unhandled type: " + unhandled);
 }
-function formatFullIncrement(time: number, type: IncrementType): string {
+function formatFullIncrementParts(time: number, type: IncrementType, long?: "long"): {
+    type: IncrementType;
+    value: string;
+}[] {
     let fullFormat = [
-        hourMinuteSecond(time),
-        formatSingleIncrement(time, "day"),
-        formatSingleIncrement(time, "month"),
-        formatSingleIncrement(time, "year"),
+        { type: "year" as const, value: formatSingleIncrement(time, "year", long) },
+        { type: "month" as const, value: formatSingleIncrement(time, "month", long) },
+        { type: "day" as const, value: formatSingleIncrement(time, "day", long) },
+        { type: "hour" as const, value: hourMinuteSecond(time) },
     ];
     let count = fullFormat.length;
-    if (type === "second") count = 1;
-    if (type === "minute") count = 1;
-    if (type === "minute2") count = 1;
-    if (type === "hour") count = 1;
-    if (type === "hour6") count = 1;
-    if (type === "day") count = 2;
+    if (type === "second") count = 4;
+    if (type === "minute") count = 4;
+    if (type === "minute2") count = 4;
+    if (type === "hour") count = 4;
+    if (type === "hour6") count = 4;
+    if (type === "day") count = 3;
     if (type === "week") count = 3;
-    if (type === "month") count = 3;
-    if (type === "year") count = 4;
-    return fullFormat.slice(0, count).join(" ");
+    if (type === "month") count = 2;
+    if (type === "year") count = 1;
+    return fullFormat.slice(0, count);
 }
-function getIncrementSubRanges(time: number, type: IncrementType): {
-    mainTitle: string;
+function formatFullIncrement(time: number, type: IncrementType, long?: "long"): string {
+    return formatFullIncrementParts(time, type, long).map(x => x.value).join(" | ");
+}
+function getIncrementSubRanges(time: number, type: IncrementType, subType = incrementSubs[type].subType): {
     ranges: {
         start: number;
         end: number;
-        title: string;
     }[];
 } {
-    let subType = incrementSubs[type].subType;
     let start = getStartOfIncrement(time, type);
     let end = getNextIncrement(time, type);
     let cur = start;
-    let ranges: { start: number; end: number; title: string; }[] = [];
+    let ranges: { start: number; end: number; }[] = [];
     while (true) {
         let next = getNextIncrement(cur, subType);
-        ranges.push({ start: cur, end: next, title: formatSingleIncrement(cur, subType) });
+        ranges.push({ start: cur, end: next, });
         cur = next;
         if (cur >= end) break;
     }
     return {
-        mainTitle: formatFullIncrement(start, type),
         ranges,
     };
 }

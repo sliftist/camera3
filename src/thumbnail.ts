@@ -1,8 +1,8 @@
 import { cache } from "socket-function/src/caching";
 import { DiskCollectionPromise, DiskCollectionRaw, DiskCollection } from "./storage/DiskCollection";
 import { getFileStorage } from "./storage/FileFolderAPI";
-import { decodeVideoKey, getVideoTimeline } from "./videoHelpers";
-import { H264toMP4 } from "mp4-typescript";
+import { decodeVideoKey, getVideoTimeline, parseVideoKey } from "./videoHelpers";
+import { H264toMP4, SplitAnnexBVideo } from "mp4-typescript";
 import { observable } from "./misc/mobxTyped";
 
 
@@ -18,11 +18,15 @@ let thumbnails = new DiskCollectionRaw("thumbnails6");
 
 let totalThreads = 0;
 let freeThreads = new Set<number>();
-function getThread() {
+async function getThread(): Promise<number> {
     if (freeThreads.size) {
         let thread = freeThreads.values().next().value!;
         freeThreads.delete(thread);
         return thread;
+    }
+    if (totalThreads > 8) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return getThread();
     }
     return totalThreads++;
 }
@@ -72,17 +76,27 @@ let thumbObservables = new Map<string, {
 }>();
 
 export function getThumbnailURL(config: {
-    time: number;
+    startTime: number;
+    endTime: number;
     maxDimension: number;
     format?: "jpeg" | "png";
     cropToAspectRatio?: number;
     retryErrors?: boolean;
+    // Gets the first frame in the underlying video storage, which might be significantly
+    //  offset from the requested time. However, this also allows us to do partial reads.
+    fast?: boolean;
 }) {
     let videos = getVideoTimeline();
-    // Find the video this is part of
-    let video = videos.find(x => x.time <= config.time && x.endTime >= config.time);
+    // We show the preview from the start of the segment, so ideally that is in the range requested
+    let matches = videos.filter(x => config.startTime <= x.time && x.time < config.endTime);
+    if (matches.length === 0) {
+        // Otherwise... just get any segment that overlaps
+        matches = videos.filter(x => x.endTime >= config.startTime && x.time <= config.endTime);
+    }
+    let video = matches[0];
     if (!video) return "no matching video";
-    let offset = config.time - video.time;
+    //let offset = config.time - video.time;
+    let offset = 0;
 
     let keyConfig: KeyConfig = {
         ...config,
@@ -96,6 +110,8 @@ export function getThumbnailURL(config: {
         thumbObservables.set(key, obs);
         void getThumbnailPromise(keyConfig).then((value) => {
             obs!.value = value || "";
+        }, err => {
+            obs!.value = err.stack || "";
         });
     }
     return obs.value;
@@ -108,23 +124,60 @@ export async function getThumbnailPromise(config: KeyConfig) {
     let storage = await getFileStorage();
     let key = getKey(config);
 
-    // if (await thumbnailCache.get(key)) {
-    //     let value = await thumbnails.get(key);
-    //     if (config.retryErrors && !retriesErrors.has(key) && value && !value.toString().startsWith("data:")) {
-    //         value = undefined;
-    //         retriesErrors.add(key);
-    //     }
-    //     if (value) {
-    //         return value.toString();
-    //     }
-    // }
+    if (await thumbnailCache.get(key)) {
+        let value = await thumbnails.get(key);
+        if (config.retryErrors && !retriesErrors.has(key) && value && !value.toString().startsWith("data:")) {
+            value = undefined;
+            retriesErrors.add(key);
+        }
+        if (value) {
+            return value.toString();
+        }
+    }
 
-    let thread = getThread();
+    let thread = await getThread();
     console.log(`Generating thumbnail for ${config.file}@${config.offset} on thread ${thread}`);
     let free: (() => void)[] = [];
     try {
-        let buffer = await storage.get(file);
-        if (!buffer) return undefined;
+        let handle = await storage.folder.getNestedFileHandle([file]);
+        if (!handle) return undefined;
+
+        let buffer: Buffer | undefined;
+        {
+            let fileHandle = await handle.getFile();
+            let readSize = 160 * 1024;
+            while (true) {
+                let blob = fileHandle.slice(buffer?.length || 0, readSize);
+                let prevBuffer = buffer;
+                buffer = Buffer.from(await blob.arrayBuffer());
+                if (prevBuffer) {
+                    buffer = Buffer.concat([prevBuffer, buffer]);
+                }
+                let nals = SplitAnnexBVideo(buffer);
+
+                if (
+                    // We only know if a frame ends when there is another frames, so... we need at least 2 frames
+                    //  (AND, the last one will probably be incomplete, so this isn't inefficient)
+                    nals.filter(x => x.type === "frame" || x.type === "keyframe").length >= 2
+                    // And we need an SPS to play it. We COULD just create this ourself, and maybe we should,
+                    //  but for now... it's a lot easier to get the SPS from the file (also, we would need
+                    //  to store at least the width/height, at which point... we might as well store it
+                    //  in the file, at which point... we might as well store an SPS. So... if videos don't
+                    //  have this, the solution is probably to add it into those videos, instead of dynamically
+                    //  guessing it at runtime)
+                    && nals.find(x => x.type === "sps")
+                ) {
+                    console.log(`Found enough data to generate thumbnail after ${buffer.length} bytes`);
+                    break;
+                }
+                if (readSize >= fileHandle.size) {
+                    return undefined;
+                }
+                readSize *= 2;
+            }
+        }
+
+
         let info = decodeVideoKey(file);
         let frameDurationInSeconds = info ? (info.endTime - info.time) / info.frames / 1000 : 1 / 30;
         let { buffer: mp4Buffer, frameCount, keyFrameCount } = await H264toMP4({
@@ -199,7 +252,7 @@ export async function getThumbnailPromise(config: KeyConfig) {
         }
 
         // // Don't wait to commit, just return it
-        // void thumbnailCache.set(key, 1);
+        void thumbnailCache.set(key, 1);
         console.log(`Generated thumbnail for ${config.file}@${config.offset} on thread ${thread}, size ${thumbnail.length}`);
         void thumbnails.set(key, Buffer.from(thumbnail));
 

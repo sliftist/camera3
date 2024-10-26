@@ -121,11 +121,21 @@ export class Trackbar extends preact.Component<{
             }
         }
 
+        let playState = videoManager.getPlayState();
+
         return (
             <div
                 className={
                     css.fillWidth.flexShrink0
                         .relative
+                    + css.hsl(
+                        playState === "Playing" && 120
+                        || playState === "Paused" && 30
+                        || 220
+                        ,
+                        50,
+                        50
+                    )
                 }
             >
                 {segmentValues.map(segment =>
@@ -137,6 +147,7 @@ export class Trackbar extends preact.Component<{
                                 //  nothing renders.
                                 .width(`calc(max(1px, ${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%))`)
                                 .fillHeight
+                                .opacity(0.8)
                             + (segment.buffered ? css.hsl(120, 50, 50) : css.hsl(120, 0, 50))
                         }
                     />

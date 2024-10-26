@@ -8,7 +8,7 @@ import { ConvertAnnexBToRawBuffers } from "mp4-typescript/src/parser-implementat
 import { LargeBuffer } from "mp4-typescript/src/parser-lib/LargeBuffer";
 import * as NAL from "mp4-typescript/src/parser-implementations/NAL";
 
-const videoFolder = "/mnt/usb256/output/";
+const videoFolder = "/media/video/output/";
 
 async function moveFiles() {
     let files = await fs.promises.readdir(videoFolder);
@@ -77,7 +77,7 @@ async function limitFiles() {
 
     // It's a 256GB USB stick. We'll run into file count issues (making readDir unbearably slow)
     //  before we run out of space.
-    let availableSpace = 1024 * 1024 * 1024 * 200;
+    let availableSpace = 1024 * 1024 * 1024 * 100;
     let deleted = 0;
     for (let file of moved) {
         let stat = await fs.promises.stat(videoFolder + file);

@@ -79,24 +79,6 @@ export class Page extends preact.Component {
                         </button>
                     </div>
                 </div>
-
-                <div className={css.hbox(20).wrap.overflowAuto.height(400)}>
-                    {allFiles.slice(0, 10).map(key => {
-                        let info = FileStorageSynced.getInfo(key);
-                        return (
-                            <div className={css.size(200, 40)}>
-                                {/* {key} */}
-                                {info?.size} bytes, {new Date(getVideoStartTime(key)).toLocaleString()} to  {new Date(parseVideoKey(key)?.endTime || 0).toLocaleString()}  frames {parseVideoKey(key)?.frames}
-
-                                <button onClick={() => {
-                                    playVideo(key);
-                                }}>
-                                    Play
-                                </button>
-                            </div>
-                        );
-                    })}
-                </div>
                 <div className={css.fillBoth.minHeight(0)}>
                     <VideoPlayer />
                 </div>

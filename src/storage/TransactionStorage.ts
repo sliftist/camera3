@@ -209,12 +209,12 @@ export class TransactionStorage implements IStorage<Buffer> {
 
 
     private async loadAllTransactions(): Promise<void> {
+        let time = Date.now();
         const keys = await this.rawStorage.getKeys();
         const transactionFiles = keys.filter(key => key.endsWith(CHUNK_EXT));
 
         sort(transactionFiles, x => parseInt(x));
 
-        let time = Date.now();
         let size = 0;
         for (const file of transactionFiles) {
             let chunk = parseInt(file);

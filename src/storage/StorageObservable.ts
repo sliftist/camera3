@@ -72,7 +72,7 @@ export class StorageSync<T> implements IStorageSync<T> {
         if (this.loadedKeys) return Array.from(this.keys);
         this.loadedKeys = true;
         this.pendingGetKeys = this.storage.getKeys();
-        this.pendingGetKeys.finally(() => {
+        void this.pendingGetKeys.finally(() => {
             this.pendingGetKeys = undefined;
         });
         let keys = await this.pendingGetKeys;
@@ -91,5 +91,13 @@ export class StorageSync<T> implements IStorageSync<T> {
         this.cached.delete(key);
         this.infoCached.delete(key);
         this.keys.delete(key);
+    }
+
+    public async reset() {
+        this.cached.clear();
+        this.infoCached.clear();
+        this.keys.clear();
+        this.synced.keySeqNum++;
+        await this.storage.reset();
     }
 }

@@ -1,114 +1,155 @@
-import { delay } from "socket-function/src/batching";
+import { delay, runInfinitePoll } from "socket-function/src/batching";
 import os, { endianness } from "os";
 import fs from "fs";
-import { sort, timeInMinute } from "socket-function/src/misc";
+import { sort, timeInMinute, timeInSecond } from "socket-function/src/misc";
 import { formatNumber, formatTime } from "socket-function/src/formatting/format";
 
-import { ConvertAnnexBToRawBuffers } from "mp4-typescript/src/parser-implementations/NAL";
-import { LargeBuffer } from "mp4-typescript/src/parser-lib/LargeBuffer";
-import * as NAL from "mp4-typescript/src/parser-implementations/NAL";
+import { IdentifyNal, SplitAnnexBVideo } from "mp4-typescript";
+import { decodeVideoKey, encodeVideoKey, joinNALs, parseVideoKey } from "./videoHelpers";
+import { getReadyVideos, emitFrames, videoFolder } from "./frameEmitHelpers";
 
-const videoFolder = "/media/video/output/";
+
+// NOTE: For anything but 1, we split into keyframes. SO, if there is a keyframe every 30 frames,
+//  we will sample at most 1 out of every 30 frames, making the minimum speed 30x.
+let speedGroups = [1, 60, 60 * 60, 60 * 60 * 24, 60 * 60 * 24 * 14];
+const MAX_DISK_USAGE = 1024 * 1024 * 1024 * 200;
+
+let moveFileDropCount = 0;
 
 async function moveFiles() {
-    let files = await fs.promises.readdir(videoFolder);
-    let toBeMoved = files.filter(x => x.startsWith("frames_"));
-
-    let filesWithTimestamps: {
-        name: string;
-        created: number;
-        modified: number;
-        nextCreated: number;
-    }[] = [];
-    for (let file of toBeMoved) {
-        let stat = await fs.promises.stat(videoFolder + file);
-        filesWithTimestamps.push({
-            name: file,
-            created: stat.birthtimeMs,
-            modified: stat.mtimeMs,
-            nextCreated: 0,
-        });
-    }
-    sort(filesWithTimestamps, x => x.created);
-    for (let i = 0; i < filesWithTimestamps.length - 1; i++) {
-        filesWithTimestamps[i].nextCreated = filesWithTimestamps[i + 1].created;
-    }
-    // The latest file is probably still being written to, so skip it.
-    filesWithTimestamps.pop();
+    let filesWithTimestamps = await getReadyVideos();
     if (filesWithTimestamps.length === 0) return;
 
-    console.log(`Found ${filesWithTimestamps.length} files to move at ${new Date().toISOString()}`);
+    //console.log(`Found ${filesWithTimestamps.length} files to move at ${new Date().toISOString()}`);
     let time = Date.now();
     for (let file of filesWithTimestamps) {
-
         let endTime = file.modified;
 
-        // The the next file creation is within 2 seconds, use it as our endTime, to
+        // The the next file creation is within a few seconds, use it as our endTime, to
         //  be a little more accurate (otherwise we don't count overhead time)
-        if (file.nextCreated < file.modified + 2000) {
+        if (file.nextCreated < file.modified + 10000) {
             endTime = file.nextCreated;
         }
 
-
         let buffer = await fs.promises.readFile(videoFolder + file.name);
-        let buffers = ConvertAnnexBToRawBuffers(new LargeBuffer([buffer]));
-        let frames = 0;
-        for (let buffer of buffers) {
-            let parsed = NAL.ParseNalHeaderByte2(buffer.readUInt8(0));
-            if (parsed === "frame" || parsed === "keyframe") {
-                frames++;
+
+        let nals = SplitAnnexBVideo(buffer);
+        console.log(`Processing ${file.name} with ${nals.filter(x => IdentifyNal(x) === "frame" || IdentifyNal(x) === "keyframe").length} frames`);
+        for (let speedMultiplier of speedGroups) {
+            try {
+                await emitFrames({
+                    speedMultiplier,
+                    startTime: file.created,
+                    endTime,
+                    nals: nals,
+                });
+            } catch (e) {
+                moveFileDropCount++;
+                console.error(`Error processing ${file.name} at speed ${speedMultiplier}, deleting file, so we can continue processing data`, e);
             }
         }
-
-        let p = (x: number) => x.toString().padStart(2, "0");
-        let date = new Date(file.created);
-        let newFile = `segment_${date.getUTCFullYear()}_${p(date.getUTCMonth())}_${p(date.getUTCDate())}__${p(date.getUTCHours())}_${p(date.getUTCMinutes())}_${p(date.getUTCSeconds())}__frames_${frames}__end_${endTime}.nal`;
-
-        await fs.promises.rename(videoFolder + file.name, videoFolder + newFile);
+        await fs.promises.unlink(videoFolder + file.name);
     }
-    console.log("Moved", filesWithTimestamps.length, "files in", formatTime(Date.now() - time));
+    console.log("Processed", filesWithTimestamps.length, "files in", formatTime(Date.now() - time), "at", new Date().toISOString());
+    console.log(" ");
+    if (moveFileDropCount) {
+        console.log(`Dropped ${moveFileDropCount} files so far this session`);
+    }
 }
-async function limitFiles() {
-    let files = await fs.promises.readdir(videoFolder);
-    let moved = files.filter(x => x.startsWith("segment_"));
-    moved.sort();
 
-    moved.reverse();
+async function safeReadDir(folder: string) {
+    try {
+        return await fs.promises.readdir(folder);
+    } catch (e) {
+        console.error("Error reading directory, skipping", folder, e);
+        return [];
+    }
+}
+async function safeStat(file: string) {
+    try {
+        return await fs.promises.stat(file);
+    } catch (e) {
+        console.error("Error stating file, skipping", file, e);
+        return undefined;
+    }
+}
 
-    // It's a 256GB USB stick. We'll run into file count issues (making readDir unbearably slow)
-    //  before we run out of space.
-    let availableSpace = 1024 * 1024 * 1024 * 100;
-    let deleted = 0;
-    for (let file of moved) {
-        let stat = await fs.promises.stat(videoFolder + file);
-        availableSpace -= stat.size;
-        if (availableSpace < 0) {
-            await fs.promises.unlink(videoFolder + file);
-            availableSpace += stat.size;
-            deleted++;
+async function* recursiveIterate(folder: string): AsyncGenerator<{
+    path: string;
+    size: number;
+}> {
+    let files = await safeReadDir(folder);
+    for (let file of files) {
+        let stat = await safeStat(folder + file);
+        if (!stat) continue;
+        if (stat.isDirectory()) {
+            yield* recursiveIterate(folder + file + "/");
+        } else {
+            yield {
+                path: folder + file,
+                size: stat.size,
+            };
         }
     }
-    if (deleted > 0) {
-        console.log(`Deleted ${deleted} files to free up space`);
-    } else {
-        console.log(`Space available: ${formatNumber(availableSpace)}B`);
+}
+async function safeUnlink(file: string) {
+    try {
+        return await fs.promises.unlink(file);
+    } catch (e) {
+        console.error("Error unlinking file, skipping", file, e);
+    }
+}
+
+async function limitFiles() {
+    let speedFolders = await fs.promises.readdir(videoFolder);
+    speedFolders = speedFolders.filter(x => x.endsWith("x") && !isNaN(+x.slice(0, -1)));
+    sort(speedFolders, x => -x.slice(0, -1));
+
+    let deletedFiles = 0;
+    let deletedBytes = 0;
+
+    let time = Date.now();
+    let sizePerSpeed = MAX_DISK_USAGE / speedFolders.length;
+    let remainingSpeedFolders = speedFolders.length;
+    for (let speedFolder of speedFolders) {
+        remainingSpeedFolders--;
+        let allFiles: { path: string; size: number; startTime: number; }[] = [];
+        for await (let file of recursiveIterate(videoFolder + speedFolder + "/")) {
+            let obj = decodeVideoKey(file.path);
+            if (!obj.startTime) continue;
+            allFiles.push({ path: file.path, size: file.size, startTime: obj.startTime });
+
+            // NOTE: If we run into any issues with lagging the disk, we could add a delay here to slow down iteration
+        }
+        sort(allFiles, x => x.startTime);
+
+        let totalSize = allFiles.reduce((acc, x) => acc + x.size, 0);
+        let excessSize = totalSize - sizePerSpeed;
+        let filesToRemove: string[] = [];
+        while (excessSize > 0) {
+            let file = allFiles.pop();
+            if (!file) break;
+            excessSize -= file.size;
+            deletedFiles++;
+            deletedBytes += file.size;
+            filesToRemove.push(file.path);
+        }
+        for (let file of filesToRemove) {
+            await safeUnlink(file);
+        }
+        if (excessSize < 0) {
+            sizePerSpeed += excessSize / remainingSpeedFolders;
+        }
     }
 
+    let totalTime = Date.now() - time;
+    if (deletedFiles > 0) {
+        console.log(`Limited files in ${formatTime(totalTime)}, deleted ${deletedFiles} files, ${formatNumber(deletedBytes)}B`);
+    }
 }
 
 async function main() {
-    while (true) {
-        try {
-            await moveFiles();
-        } catch (e) {
-            console.error(e);
-        }
-        try {
-            await limitFiles();
-        } catch (e) {
-            console.error(e);
-        }
-        await delay(1000 * 5);
-    }
+    runInfinitePoll(timeInSecond, moveFiles);
+    runInfinitePoll(timeInMinute * 15, limitFiles);
 }
-main().catch(e => console.error(e)).finally(() => process.exit());
+main().catch(e => console.error(e));

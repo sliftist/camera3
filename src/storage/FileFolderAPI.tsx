@@ -6,6 +6,7 @@ import { cache, lazy } from "socket-function/src/caching";
 import { css, isNode } from "typesafecss";
 import { IStorageRaw } from "./IStorage";
 import { runInSerial } from "socket-function/src/batching";
+import { getSpeedFolderName } from "../urlParams";
 
 let handleToId = new Map<FileSystemDirectoryHandle, string>();
 let displayData = observable({
@@ -29,6 +30,7 @@ class DirectoryPrompter extends preact.Component {
         );
     }
 }
+
 
 // NOTE: Blocks until the user provides a directory
 export const getDirectoryHandle = lazy(async function getDirectoryHandle(): Promise<FileSystemDirectoryHandle> {
@@ -84,6 +86,20 @@ export const getDirectoryHandle = lazy(async function getDirectoryHandle(): Prom
 });
 
 export const getFileStorage = lazy(async function getFileStorage(): Promise<FileStorage> {
+    if (isNode()) return "No file storage in NodeJS. Is the build script running startup steps? Check for isNode() and NOOP those" as any;
+    let handle = await getDirectoryHandle();
+    let id = handleToId.get(handle);
+    if (!id) throw new Error("Missing id for handle");
+    let folderName = getSpeedFolderName();
+    let selected: FileSystemDirectoryHandle;
+    try {
+        selected = await handle.getDirectoryHandle(folderName, { create: false });
+    } catch {
+        selected = await handle.getDirectoryHandle(folderName, { create: true });
+    }
+    return wrapHandle(selected, id);
+});
+export const getFileStorageRoot = lazy(async function getFileStorage(): Promise<FileStorage> {
     if (isNode()) return "No file storage in NodeJS. Is the build script running startup steps? Check for isNode() and NOOP those" as any;
     let handle = await getDirectoryHandle();
     let id = handleToId.get(handle);
@@ -199,6 +215,12 @@ function wrapHandleFiles(handle: FileSystemDirectoryHandle): IStorageRaw {
             }
             return keys;
         },
+
+        async reset() {
+            for await (const [name, entry] of handle) {
+                await handle.removeEntry(entry.name, { recursive: true });
+            }
+        },
     };
 }
 
@@ -298,7 +320,7 @@ function wrapHandleNested(handle: FileSystemDirectoryHandle, id: string): Nested
     };
 }
 
-function wrapHandle(handle: FileSystemDirectoryHandle, id: string): FileStorage {
+function wrapHandle(handle: FileSystemDirectoryHandle, id = "default"): FileStorage {
     return {
         ...wrapHandleFiles(handle),
         folder: wrapHandleNested(handle, id),

@@ -1,9 +1,11 @@
 import { cache } from "socket-function/src/caching";
 import { DiskCollectionPromise, DiskCollectionRaw, DiskCollection } from "./storage/DiskCollection";
 import { getFileStorage } from "./storage/FileFolderAPI";
-import { decodeVideoKey, getVideoTimeline, parseVideoKey } from "./videoHelpers";
-import { H264toMP4, SplitAnnexBVideo } from "mp4-typescript";
+import { decodeVideoKey, findVideo, findVideoSync, parseVideoKey, splitNALs } from "./videoHelpers";
+import { H264toMP4, IdentifyNal, SplitAnnexBVideo } from "mp4-typescript";
 import { observable } from "./misc/mobxTyped";
+import { getVideoIndexSynced, recheckFileNow } from "./videoLookup";
+import { binarySearchBasic } from "socket-function/src/misc";
 
 
 
@@ -15,6 +17,11 @@ const sha256 = require("./sha256") as {
 
 let thumbnailCache = new DiskCollectionPromise<1>("thumbnailCache6");
 let thumbnails = new DiskCollectionRaw("thumbnails6");
+
+export async function deleteThumbCache() {
+    await thumbnailCache.reset();
+    await thumbnails.reset();
+}
 
 let totalThreads = 0;
 let freeThreads = new Set<number>();
@@ -76,8 +83,7 @@ let thumbObservables = new Map<string, {
 }>();
 
 export function getThumbnailURL(config: {
-    startTime: number;
-    endTime: number;
+    file: string;
     maxDimension: number;
     format?: "jpeg" | "png";
     cropToAspectRatio?: number;
@@ -86,27 +92,15 @@ export function getThumbnailURL(config: {
     //  offset from the requested time. However, this also allows us to do partial reads.
     fast?: boolean;
 }) {
-    let videos = getVideoTimeline();
-    // We show the preview from the start of the segment, so ideally that is in the range requested
-    let matches = videos.filter(x => config.startTime <= x.time && x.time < config.endTime);
-    if (matches.length === 0) {
-        // Otherwise... just get any segment that overlaps
-        matches = videos.filter(x => x.endTime >= config.startTime && x.time <= config.endTime);
-    }
-    let video = matches[0];
-    if (!video) return "no matching video";
-    //let offset = config.time - video.time;
     let offset = 0;
-
     let keyConfig: KeyConfig = {
         ...config,
-        file: video.file,
         offset,
     };
     let key = getKey(keyConfig);
     let obs = thumbObservables.get(key);
     if (!obs) {
-        obs = observable({ value: "", });
+        obs = observable({ value: "loading", });
         thumbObservables.set(key, obs);
         void getThumbnailPromise(keyConfig).then((value) => {
             obs!.value = value || "";
@@ -119,7 +113,7 @@ export function getThumbnailURL(config: {
 
 let retriesErrors = new Set<string>();
 
-export async function getThumbnailPromise(config: KeyConfig) {
+export async function getThumbnailPromise(config: KeyConfig): Promise<string> {
     let { file } = config;
     let storage = await getFileStorage();
     let key = getKey(config);
@@ -139,8 +133,11 @@ export async function getThumbnailPromise(config: KeyConfig) {
     console.log(`Generating thumbnail for ${config.file}@${config.offset} on thread ${thread}`);
     let free: (() => void)[] = [];
     try {
-        let handle = await storage.folder.getNestedFileHandle([file]);
-        if (!handle) return undefined;
+        let handle = await storage.folder.getNestedFileHandle(file.split("/"));
+        if (!handle) {
+            void recheckFileNow(file);
+            return "file not found";
+        }
 
         let buffer: Buffer | undefined;
         {
@@ -153,25 +150,25 @@ export async function getThumbnailPromise(config: KeyConfig) {
                 if (prevBuffer) {
                     buffer = Buffer.concat([prevBuffer, buffer]);
                 }
-                let nals = SplitAnnexBVideo(buffer);
+                let nals = splitNALs(buffer, "ignorePartial");
 
                 if (
                     // We only know if a frame ends when there is another frames, so... we need at least 2 frames
                     //  (AND, the last one will probably be incomplete, so this isn't inefficient)
-                    nals.filter(x => x.type === "frame" || x.type === "keyframe").length >= 2
+                    nals.filter(x => IdentifyNal(x) === "frame" || IdentifyNal(x) === "keyframe").length >= 2
                     // And we need an SPS to play it. We COULD just create this ourself, and maybe we should,
                     //  but for now... it's a lot easier to get the SPS from the file (also, we would need
                     //  to store at least the width/height, at which point... we might as well store it
                     //  in the file, at which point... we might as well store an SPS. So... if videos don't
                     //  have this, the solution is probably to add it into those videos, instead of dynamically
                     //  guessing it at runtime)
-                    && nals.find(x => x.type === "sps")
+                    && nals.find(x => IdentifyNal(x) === "sps")
                 ) {
                     console.log(`Found enough data to generate thumbnail after ${buffer.length} bytes`);
                     break;
                 }
                 if (readSize >= fileHandle.size) {
-                    return undefined;
+                    return "no keyframe found in video";
                 }
                 readSize *= 2;
             }
@@ -179,9 +176,15 @@ export async function getThumbnailPromise(config: KeyConfig) {
 
 
         let info = decodeVideoKey(file);
-        let frameDurationInSeconds = info ? (info.endTime - info.time) / info.frames / 1000 : 1 / 30;
+        let frameDurationInSeconds = info ? (info.endTime - info.startTime) / info.frames / 1000 : 1 / 30;
+        let nals = splitNALs(buffer, "ignorePartial");
+        // Only include up to the first key frame
+        let keyFrameIndex = nals.findIndex(x => IdentifyNal(x) === "keyframe");
+        if (keyFrameIndex !== -1) {
+            nals = nals.slice(0, keyFrameIndex + 1);
+        }
         let { buffer: mp4Buffer, frameCount, keyFrameCount } = await H264toMP4({
-            buffer,
+            buffer: nals,
             frameDurationInSeconds: frameDurationInSeconds,
             mediaStartTimeSeconds: 0,
         });
@@ -243,7 +246,7 @@ export async function getThumbnailPromise(config: KeyConfig) {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
-        if (!ctx) return undefined;
+        if (!ctx) return "Failed to create 2d context";
         ctx.drawImage(videoElement, sx, sy, sw, sh, 0, 0, width, height);
         let format = config.format || "jpeg";
         let thumbnail = canvas.toDataURL(`image/${format}`, 0.8);

@@ -25,24 +25,7 @@ export class Button extends preact.Component<{
 
         return (
             <div
-                className={css
-                    .hsl(hue, saturation, lightness)
-                    //.border(`${borderSize}px solid transparent`, "soft")
-                    // .borderTopColor(`hsl(${hue}, ${saturation * 1.6}%, ${lightness * 3}%)`)
-                    // .borderLeftColor(`hsl(${hue}, ${saturation * 1.6}%, ${lightness * 3}%)`)
-                    // .borderRightColor(`hsl(${hue}, ${saturation * 0.8}%, ${lightness * 1.3}%)`)
-                    // .borderBottomColor(`hsl(${hue}, ${saturation * 0.7}%, ${lightness * 1.3}%)`)
-                    // .borderRightColor(`hsl(${hue}, ${saturation * 0.8}%, ${lightness * 1.6}%)`)
-                    // .borderBottomColor(`hsl(${hue}, ${saturation * 0.8}%, ${lightness * 1.6}%)`)
-                    .fontSize(fontSize)
-                    .relative
-                    .pointer
-                    .transition("all 0.2s")
-                    + padding
-                    + " trigger-hover "
-                    + (!this.props.invertHover && css.background(`hsl(${hue}, ${saturation + 30}%, ${lightness - 10}%)`, "hover", "important"))
-                    + (this.props.invertHover && css.background(`hsl(${hue}, ${saturation}%, ${lightness + 30}%)`, "hover", "important"))
-                }
+                className={css.relative}
                 onClick={e => {
                     // Prevent default, to prevent selection
                     e.preventDefault();
@@ -53,12 +36,25 @@ export class Button extends preact.Component<{
                     css.absolute
                         .fillBoth
                         .pos(3, 2)
-                        .zIndex(-1)
                         .left(0, "hover", "important")
                         .top(0, "hover", "important")
                         .hsl(hue, saturation * 0.8, Math.min(90, lightness * 1.6))
                 } />
-                {this.props.children}
+                <div className={
+                    css
+                        .hsl(hue, saturation, lightness)
+                        .fontSize(fontSize)
+                        .relative
+                        .pointer
+                        .transition("all 0.2s")
+                    + padding
+                    + " trigger-hover "
+                    + (!this.props.invertHover && css.background(`hsl(${hue}, ${saturation + 30}%, ${lightness - 10}%)`, "hover", "important"))
+                    + (this.props.invertHover && css.background(`hsl(${hue}, ${saturation}%, ${lightness + 30}%)`, "hover", "important"))
+
+                }>
+                    {this.props.children}
+                </div>
             </div>
         );
     }

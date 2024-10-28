@@ -177,7 +177,7 @@ function replaceLine(code: string, path: string, line: string) {
     return line.replace(
         /const (\w+) = __importDefault\(require\("(.+?)"\)\);/g,
         (_, variableName, importPath: string) => {
-            return createImport({ variableName, importPath, filePath: path, code, forceDefault: true });
+            return createImport({ variableName, importPath, filePath: path, code });
         }
     ).replace(
         /Promise\.resolve\(\)\.then\(\(\) => __importStar\(require\("(.+?)"\)\)\);/g,
@@ -193,6 +193,16 @@ function replaceLine(code: string, path: string, line: string) {
         /const\s+(\w+)\s*=\s*require\(\s*["'](.+)["']\s*\);?\s*/g,
         (_, variableName, importPath) => {
             return createImport({ variableName, importPath, filePath: path, code });
+        }
+    ).replace(
+        // const { ? } = require("?");
+        /const\s+(.+?)\s*=\s*require\(\s*["'](.+?)["']\s*\);?\s*/g,
+        (_, variableName, importPath) => {
+            let fileNameVariable = importPath.replaceAll("/", "_").replace(/\W/g, "");
+            return (
+                createImport({ variableName: fileNameVariable, importPath, filePath: path, code, forceDefault: true })
+                + `\nconst ${variableName} = ${fileNameVariable}.default || ${fileNameVariable};`
+            );
         }
     ).replace(
         /^require\(\s*["'](.+)["']\s*\);?\s*/g,
@@ -236,7 +246,7 @@ function createImport(config: {
 
     let usesDefaultExportsExplicitly = code.includes(`${variableName}.default.`);
     const modulePathWithExtension = modulePath.endsWith(".js") ? modulePath : `${modulePath}.js`;
-    if (!usesDefaultExportsExplicitly) {
+    if (!usesDefaultExportsExplicitly || forceDefault) {
         return `import ${variableName} from "${modulePathWithExtension}";`;
     } else {
         return `import * as ${variableName} from "${modulePathWithExtension}";`;

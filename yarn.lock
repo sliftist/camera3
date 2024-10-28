@@ -973,10 +973,10 @@ mobx@^6.13.3, mobx@^6.6.2:
   resolved "https://registry.yarnpkg.com/mobx/-/mobx-6.13.3.tgz#27f6171125fd4f737daec940c1d199c479f1b8c5"
   integrity sha512-YtAS+ZMbdpbHYUU4ESht3na8KiX11KuMT1yOiKtbKlQ0GZkHDYPKyEw/Tdp7h7aHyLrTWj2TBaSNJ6bCr638iQ==
 
-mp4-typescript@^0.14.0:
-  version "0.14.0"
-  resolved "https://registry.yarnpkg.com/mp4-typescript/-/mp4-typescript-0.14.0.tgz#7bc50fc8bbb3695d80a9b11dc61a5f9bdc53e7f9"
-  integrity sha512-DPfM1VEh/ovPo0tZSc+OklYMqv00H1pXQLgMGYoINOq/tBM1EJ5wk0DP3YouK+jAnk0Sgn59ZLJRgNKjDt8HxA==
+mp4-typescript@^0.18.0:
+  version "0.18.0"
+  resolved "https://registry.yarnpkg.com/mp4-typescript/-/mp4-typescript-0.18.0.tgz#3acb9221c50b2532114bd86f3ccb356ac8a1ee45"
+  integrity sha512-sCjxOMjOGP+M/ctA5cevfGK2aHC40AMTZQa+I4FxGee0cGkKxuZZCBE47RDr8T5BklPEQBjDu6/1J6Vqe+sm+A==
   dependencies:
     pchannel "^0.4.5"
     typenode "^0.5.1"
@@ -1162,10 +1162,10 @@ slash@^3.0.0:
   resolved "https://registry.yarnpkg.com/slash/-/slash-3.0.0.tgz#6539be870c165adbd5240220dbe361f1bc4d4634"
   integrity sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q==
 
-socket-function@^0.21.0:
-  version "0.21.0"
-  resolved "https://registry.yarnpkg.com/socket-function/-/socket-function-0.21.0.tgz#d62f65a0ff5fdf0bb36baea04397e3794ebde5b5"
-  integrity sha512-ZErB9uq2vO/EiNCrOhCTQT68ONKLCQENo9lVQO32ti7ah24Nk7vkXT3So4RDnsio35tMxTvBLBDLKHK2nVEjfA==
+socket-function@^0.22.0:
+  version "0.22.0"
+  resolved "https://registry.yarnpkg.com/socket-function/-/socket-function-0.22.0.tgz#49cc8593a74eb1b2ada1d1c555948d1eff0e073f"
+  integrity sha512-Y0rfCntd+NgsWJNxkLXKSxmCpHIC+222KT9mBbjWFRrM6Dn+eDGbNIFUJ/s6ugD5AsUgzlerniqoZvyEfBQtEA==
   dependencies:
     "@types/pako" "^2.0.3"
     "@types/ws" "^8.5.3"
@@ -1298,10 +1298,10 @@ typenode@^5.4.1, typenode@^5.4.4:
     source-map-support "https://github.com/7rulnik/node-source-map-support"
     typescript "5.3.3"
 
-typesafecss@^0.9.0:
-  version "0.9.0"
-  resolved "https://registry.yarnpkg.com/typesafecss/-/typesafecss-0.9.0.tgz#fed14792e82fdf23f8145ca8eff7b1407f684817"
-  integrity sha512-L6aN+Cg+hhgTJ+MKwMhA/TcS8YSB7HxhJgQdHAa5kwIsOV3zlTR7U8ZfEsFj/ciP3yLUX71EwKyC9+iTB7hRZg==
+typesafecss@^0.10.0:
+  version "0.10.0"
+  resolved "https://registry.yarnpkg.com/typesafecss/-/typesafecss-0.10.0.tgz#0192518f9a2193f180ce59b80205a40cad3780fb"
+  integrity sha512-2B0HmONUHNX7PHZUavot5VNMx1mDYmEVVs1Zbi2t55rx8EtUWeaxN0oSGxZRCuFCsSaO6dtqihiv06cplfdBAA==
 
 typescript@5.3.3:
   version "5.3.3"

@@ -3,8 +3,10 @@ import { observable } from "./misc/mobxTyped";
 import { PromiseObj, sort, throttleFunction } from "socket-function/src/misc";
 import { runInSerial } from "socket-function/src/batching";
 import { H264toMP4 } from "mp4-typescript";
-import { decodeVideoKey } from "./videoHelpers";
-import { formatNumber } from "socket-function/src/formatting/format";
+import { decodeVideoKey, splitNALs } from "./videoHelpers";
+import { formatNumber, formatTime } from "socket-function/src/formatting/format";
+import { getSpeed } from "./urlParams";
+import { recheckFileNow } from "./videoLookup";
 
 export type VideoInfo = {
     file: string;
@@ -23,6 +25,11 @@ export type VideoInfo = {
 //      to allow changing frame rates, and easy calculation of the denominator), this only gives
 //      us a few hours (13). We use a smaller number, just to be safe.
 const MAX_PLAYABLE_TIME = 1000 * 60 * 60 * 3;
+
+let videoManager: VideoManager | undefined;
+export function getVideoManager() {
+    return videoManager;
+}
 
 // NOTE: When we first receive video we have to decide upon an epoch time. We should
 //  put this a week or so in the past, as if we try to seek before it, we have to reset
@@ -67,10 +74,11 @@ export class VideoManager {
         pausedBufferTime: number;
 
         findVideo(time: number): Promise<string>;
-        findNextVideo(file: string): Promise<string | undefined>;
+        findNextVideo(time: number): Promise<string | undefined>;
         getVideoStartTime(file: string): number;
         getVideoBuffer(file: string): Promise<Buffer | undefined>;
     }) {
+        videoManager = this;
         let video = this.config.element;
 
         const updatePlayStates = () => {
@@ -129,17 +137,6 @@ export class VideoManager {
     private getCurrentPlayTime(): number {
         return this.baseTime + this.config.element.currentTime * 1000;
     }
-    private async getVideos() {
-        let videos: VideoInfo[] = [];
-        for (let [file, info] of this.videoInfos) {
-            if (info instanceof Promise) {
-                videos.push(await info);
-            } else {
-                videos.push(info);
-            }
-        }
-        return videos;
-    }
 
     private isVideoPlaying() {
         let video = this.config.element;
@@ -157,20 +154,18 @@ export class VideoManager {
     // Time of video, not time in the future (so if their are jumps, we skip them, and keep loading more)
     private async bufferVideoByTime(duration: number) {
         let curTime = this.getCurrentPlayTime();
-        let videos = await this.getVideos();
-        sort(videos, x => -x.time);
-        let current = videos.find(x => x.time <= curTime)?.file || await this.config.findVideo(curTime);
 
         let loaded: VideoInfo[] = [];
 
         while (duration > 0) {
-            let next = await this.config.findNextVideo(current);
+            let next = await this.config.findNextVideo(curTime);
             if (!next) {
                 break;
             }
             let videoInfo = await this.loadVideo(next);
             loaded.push(videoInfo);
             duration -= videoInfo.duration;
+            curTime = this.config.getVideoStartTime(next);
         }
         return loaded;
     }
@@ -255,7 +250,8 @@ export class VideoManager {
                 let startLoadTime = Date.now();
                 let buffer = await this.config.getVideoBuffer(file);
                 if (!buffer) {
-                    console.error("No buffer for video, skipping", file);
+                    void recheckFileNow(file);
+                    console.error("Video file is missing, skipping", file);
                     return {
                         file,
                         time: startTime,
@@ -268,9 +264,13 @@ export class VideoManager {
 
                 try {
                     let info = decodeVideoKey(file);
-                    let frameDurationInSeconds = info ? (info.endTime - info.time) / info.frames / 1000 : 1 / 30;
+                    let frameDurationInSeconds = info.duration / info.frames / 1000;
+                    let speed = getSpeed();
+                    if (speed !== 1) {
+                        frameDurationInSeconds = 1 / 60;
+                    }
                     let { buffer: mp4Buffer, frameCount, keyFrameCount } = await H264toMP4({
-                        buffer,
+                        buffer: splitNALs(buffer),
                         frameDurationInSeconds: frameDurationInSeconds,
                         mediaStartTimeSeconds: (startTime - this.baseTime) / 1000,
                     });
@@ -289,10 +289,10 @@ export class VideoManager {
                     sourceBuffer.addEventListener("updateend", p.resolve as any);
                     await p.promise;
                     sourceBuffer.removeEventListener("updateend", p.resolve as any);
-                    let duration = info ? info.endTime - info.time : 0;
+                    let duration = info ? info.endTime - info.startTime : 0;
 
                     let loadTime = Date.now() - startLoadTime;
-                    console.log("Loaded video in", loadTime, `${formatNumber(buffer.length / loadTime * 1000)}B/s`, file, startTime, "duration", duration);
+                    console.log("Loaded video in", formatTime(loadTime), `${formatNumber(buffer.length / loadTime * 1000)}B/s`, file, startTime, "duration", duration, "frames", frameCount, "keyframes", keyFrameCount);
 
                     return {
                         file,

@@ -74,7 +74,11 @@ export class TransactionStorage implements IStorage<Buffer> {
 
     private static allStorage: TransactionStorage[] = [];
 
-    constructor(private rawStorage: IStorageRaw, private debugName: string) {
+    constructor(
+        private rawStorage: IStorageRaw,
+        private debugName: string,
+        private writeDelay = WRITE_DELAY
+    ) {
         TransactionStorage.allStorage.push(this);
     }
     // Helps get rid of parse errors which constantly log. Also, uses less space
@@ -137,7 +141,7 @@ export class TransactionStorage implements IStorage<Buffer> {
         if (this.pendingWrite) return this.pendingWrite;
         this.pendingWrite = fileLockSection(async () => {
             // Delay to allow batching, and deduping
-            await new Promise(resolve => setTimeout(resolve, WRITE_DELAY));
+            await new Promise(resolve => setTimeout(resolve, this.writeDelay));
             let curAppends = this.pendingAppends;
             this.pendingAppends = [];
             this.pendingWrite = undefined;
@@ -194,7 +198,7 @@ export class TransactionStorage implements IStorage<Buffer> {
     private updatePendingAppends = throttleFunction(100, async () => {
         let appendCount = this.pendingAppends.length + this.extraAppends;
         let group = `Transaction (${this.debugName})`;
-        console.log(`Update pending appends ${group}: ${appendCount}`);
+        //console.log(`Update pending appends ${group}: ${appendCount}`);
         if (!appendCount) {
             setPending(group, "");
             return;
@@ -458,5 +462,22 @@ export class TransactionStorage implements IStorage<Buffer> {
         }
 
         this.currentChunk = curChunk;
+    }
+
+    public async reset() {
+        await fileLockSection(async () => {
+            let existingDiskEntries = await this.rawStorage.getKeys();
+            existingDiskEntries = existingDiskEntries.filter(x => x.endsWith(CHUNK_EXT));
+
+            try {
+                await Promise.allSettled(existingDiskEntries.map(x => this.rawStorage.remove(x)));
+            } catch { }
+
+            this.pendingAppends = [];
+            this.cache.clear();
+            this.currentChunk = 0;
+            this.currentChunkSize = 0;
+            this.entryCount = 0;
+        });
     }
 }

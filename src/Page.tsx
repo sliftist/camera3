@@ -2,16 +2,15 @@ import preact from "preact";
 import { observer } from "./misc/observer";
 import { css } from "typesafecss";
 import { URLParamStr } from "./misc/URLParam";
-import { FileStorageSynced } from "./storage/DiskCollection";
-import { PendingDisplay } from "./storage/PendingManager";
+import { PendingDisplay, setPending } from "./storage/PendingManager";
 import { sort } from "socket-function/src/misc";
-import { H264toMP4 } from "mp4-typescript";
-import { LargeBuffer } from "mp4-typescript/src/parser-lib/LargeBuffer";
-import { RootBox } from "mp4-typescript/src/parser-implementations/BoxObjects";
-import { parseObject, writeObject } from "mp4-typescript/src/parser-lib/BinaryCoder";
 import { playVideo, VideoPlayer } from "./VideoPlayer";
 import { findVideo, getVideoStartTime, parseVideoKey } from "./videoHelpers";
 import { resetStorageLocation } from "./storage/FileFolderAPI";
+import { deleteVideoCache, forceRecheckAllNow, getAvailableSpeeds } from "./videoLookup";
+import { getSpeed, setSpeed } from "./urlParams";
+import { Button } from "./Button";
+import { deleteThumbCache } from "./thumbnail";
 
 export const pageURL = new URLParamStr("page");
 
@@ -48,35 +47,62 @@ export class Page extends preact.Component {
     curVideoSeconds = 0;
     sourceBuffer: SourceBuffer | null = null;
     render() {
-        let allFiles = FileStorageSynced.getKeys();
-        allFiles = allFiles.slice();
-        allFiles.sort();
-        allFiles.reverse();
-        allFiles = allFiles.slice(0, 10);
         return (
             <div className={css.size("100vw", "100vh").overflowHidden.vbox0}>
                 <div className={
                     css.display("grid")
-                        .gridTemplateColumns("1fr 2fr 1fr")
+                        .gridTemplateColumns("1fr 1fr 1fr")
                         .fillWidth
                 }>
                     <div className={
                         css.hbox(10).alignItems("center")
                             .whiteSpace("nowrap")
                             .flexShrink0
-                            .maxWidth("30vw")
+                            .maxWidth("40vw")
                             .overflowHidden
                             .textOverflow("ellipsis")
                     }>
                         <PendingDisplay />
+                        <Button
+                            hue={-5}
+                            onClick={async () => {
+                                setPending("Reset Cache", "working");
+                                try {
+                                    await deleteVideoCache();
+                                    await deleteThumbCache();
+                                    window.location.reload();
+                                } catch (e: any) {
+                                    setPending("Reset Cache", "error " + e.message);
+                                    console.error("Failed to reset cache", e);
+                                }
+                            }}
+                        >
+                            Delete Cache
+                        </Button>
                     </div>
-                    <div className={css.fillWidth}>
+                    <div className={css}>
 
                     </div>
-                    <div className={css.fillWidth.hbox(10).justifyContent("end")}>
-                        <button onClick={() => resetStorageLocation()}>
-                            Pick New Folder
-                        </button>
+                    <div className={css.fillWidth.hbox(20).justifyContent("end")}>
+                        <Button onClick={() => forceRecheckAllNow()}>
+                            Reload Videos
+                        </Button>
+                        <div className={css.hbox(5)}>
+                            <b>Switch Speed</b>
+                            {getAvailableSpeeds().map(speed => (
+                                <Button
+                                    hue={320}
+                                    saturation={speed === getSpeed() ? 0 : -50}
+                                    data-hotkey={speed}
+                                    onClick={() => setSpeed(speed)}
+                                >
+                                    {speed}x
+                                </Button>
+                            ))}
+                        </div>
+                        <Button hue={320} onClick={() => resetStorageLocation()}>
+                            Change Video Folder
+                        </Button>
                     </div>
                 </div>
                 <div className={css.fillBoth.minHeight(0)}>

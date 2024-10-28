@@ -25,4 +25,8 @@ export class JSONStorage<T> implements IStorage<T> {
     public async getInfo(key: string) {
         return await this.storage.getInfo(key);
     }
+
+    public async reset() {
+        await this.storage.reset();
+    }
 }

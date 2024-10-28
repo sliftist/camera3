@@ -40,4 +40,8 @@ export class PendingStorage<T> implements IStorage<T> {
         let text = Array.from(this.pending.entries()).map(([key, value]) => `${key}: ${value}`).join(", ");
         setPending(this.pendingGroup, text);
     });
+
+    public async reset() {
+        return this.storage.reset();
+    }
 }

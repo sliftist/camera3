@@ -3,71 +3,79 @@ UNFIXABLE BUGS
         - And sometimes it just dies
     - Sometimes /dev/video0 goes away. We can switch, but I think that video crashes as well, etc, etc, until there is nothing let by /dev/video10, which I think is an encoded, which then hangs forever.
 
+BUG (can't repro)
+    Video keeps disappearing / being deleted?
+        - Is the cleanup code deleting random video? But it's not even running...
+            - Are we... doing something else that breaks the video? Hmm...
+            - Is it just the drive occasionally erroring out, which we consider meaning the video is missing?
+
+Play high speed data correctly
+    - We need to adjust how we play it
+        - I think we need to adjust our baseTime, and... scale the time down? Ugh...
+        - Basically... { inputEncodeStartTime, inputEncodeEndTime }, and then a "INTERNAL_MAX_VIDEO_SIZE", we can map times to a fraction, and then to the internal time
+
+4) FPS control
+    - Buttons, one being "natural" which is only available for 1x, and which is not clickable, but always shows the current FPS
+    - For sped up video default to 60FPS
+    - Natural / 60fps / 120fps / 144fps
+    - Test 120fps
+        - For testing show for non-sped up video. This is kind of bad, but... also useful.
+
+Update VideoManager to use a queue to manage operations
+    - Load => .currentTime set => play
+    - Forces things to run in order
+    - BUT, allow clearing the queue
+        - We can break up most operations so cancellation isn't required.
+        - Loading data into the sourceBuffer will require checking to verify it hasn't been detached.
+    - Log the queue, so we can tell what it's doing, when it's done, and what it will do next
+    - UPDATE the gap jumper to look at the queue, so it only jumps gaps when we're idle
+        - AND update it to just poll, so we never miss jumping gaps
+        - Verify it on some gaps (and we can even create some gaps to test it)
+
+ALSO, fix previews not showing
+    - Maybe this will just be fixed anyways? But... I don't think so. I think when we load video and then set currentTime the preview isn't showing until we start playing. Maybe we need to play for a second then stop playing?
+
+VERIFY on our choppy incorrectly timed video, which might require gap jumping (although it might also play normally...)
 
 
-Show current FPS indicator (at least on hover!)
-    - Just the fps of the video, from its key
-    - ALSO, bitrate
-    - In top right, and move other stats to top left
-
-
-REPRO
-    - Load page at time
-    - CLick on time 4 hours in the past
-    - We get an error when loading, and it never loads...
-
-Fix flakey seeking
-    - When seeking a large amount it jumps around a bit
-    - Something is still running which sets the currentTime, when it shouldn't
-        - Maybe the gap jumper? Hmm...
-        - Maybe we should have the gap jumper actually check if there is a gap in the videos?
-    - Maybe we need to rewrite VideoManager entirely
-        - Maybe when loading a new SourceBuffer we need to entirely lock down the video element, rejecting all previous requests?
-ALSO, fix flakey playback
-    - It seems to get stuck, on one frame, then jump to the next. It MIGHT be because of how we are encoding/parsing the video (maybe we need to just generate the SPS ourself?), or... it might be how we manage playback? (Or just how we encode the frame rate, or... how the SPS is encoded anyways)
-
-Folder nesting!
-    1) Update fix.ts to nest based on timestamp
-        - Folder timestamp is based on NOW (it's unrelated to the contents)
-        - Timestamp is rounded up to 10 seconds (so each folder will have about 10 seconds of video)
-        - Each digit gets it's own folder
-        - Root is "1x", because... eventually we'll write more
-        - 1 keyframe per file
-            - make sure sps/pps is there, and if not, try to copy it, and otherwise... I guess that's fine, it'll break on decoding, but at least we won't lose the video.
-        - AH, and... now tracking size is a BIT more difficult. But... we can just cache the existing files (we should really be doing this anyways), and reading nested folders isn't so bad anyways
-            - BUT, in preparation for external deletes... make delete batching, via making the deleteTo threshold below the deleteAt threshold (ex, delete at 100GB, and delete to 90GB) AND, recheck the size before deleting, in case files were deleted (and also... only check every 15 minutes, in case we are right on the threshold and all new data is being deleted, so we keep crossing the threshold).
-    1.1) Sped up video files
-        - Round up to when the file will finish, assuming a key frame every second as input, and 30 frames per output file
-        - Only if the width/height is the same
-        - Only if the times are within 5 * speed factor `frame times of the last raw video frame` time of each other
-        - Show FPS control (ONLY for sped up video)
-            - Default to 60
-            - Test 120fps
-                - For testing show for non-sped up video. This is kind of bad, but... also useful.
-    1.2) Add sped up video folder selection in the header
-    2) Create IStoragePath, and implement IStoragePath<Buffer> (not sync version though)
-        - Discovered and if a flag is set, when we load filestorage, we nest it immediate.
-        - All of our caches, etc, should just work, as they are stored in this folder as well
-        - Store the original handle, in case we want root collections
-    3) Reading
-        - New interface: { startTime; endTime; files: string[] }
-        - Folder maps to a time (even root folders, by assuming the remaining digits are 9)
-        - If `folder time < readTime - timeInMinute * 5`, we can cache it and never read it again
-        - We'll then be reading equal to the digits, and because of time rounding to 10 seconds, this means we'll read about 9 folders every time (so... now many, and each has at most 10 files/folders!)
-
-Setup inside camera, and test with that instead (so we can get more motion)
-
-
-Python script to re-encode sped up video
-    - Just directly replaces files, so the file existence cache can be kept
-    - Do a rename swap, so... it should be safe?
-
-Serverside python diff code
+Serverside python activity code
     - Find activity, and delete video with no activity (keeping a buffer of a few files between activity and deleting)
     - FIRST, just log the activity ranges, and manually verify them
 
+IMPORTANT! During playback, if we fail to find a file (because the activity code deleted it), wait a second, and then tell the videoLookup to update, and when it finishes, use this to get the file at the time, and try again.
+    - Otherwise processing will break playback, which it shouldn't...
 
+Python script to re-encode sped up video
+    - New file names, via a new priority value
+    - If we detect data with this type, we will ignore anything it overlaps (at all) with, that has a lower priority
+        - We can also use this to detect files we have yet to re-encode
 
+Pre-thumbnail generation
+    - Could probably do this when finding activity
+        - Because activity tracking looks at EVERY frame of the sped up code, this might not map to EVERY 1x segment, but... it should map to most of them. And every sped up segment will get a frame (many, but we just want the first)
+    - Storing beside each video, for each segment
+        - AND, only on video with activity
+        - Create thumbnail2, which still locally caches, but then gets it off the adjacent jpeg (and maybe falls back to "thumbnail.ts" if there is no adjacent jpeg)
+    - Make sure to gc these in fix.ts, when we limit size
+        - AND in activity deletion
+
+RTP streaming
+    - Get the video by polling the file as it is written VERY frequently. This should give us < 1 second latency (on getting the NALs at least)
+    - WebRTC (S)RTP / DTLS
+    - SRTP eats the DTLS connection, like websockets do, which makes things difficult
+        - ALTHOUGH, maybe this means we don't have to implement MOST of DTLS, so we could implement it ourself?
+        - We COULD try to find a SRTP server. Apparently gstreamer handles is?
+        - And... the web connections is extremely particular and wants us to pre-load it with session ids, ice credentials?, etc.
+            - We could try it without them?
+        - We MIGHT be able to craft a static SDP
+    - TRY to get it working with GSTREAMER.
+        - Apparently whipclientsink might do what we want?
+        - https://claude.ai/chat/7da8d224-01b6-4700-b793-de6729fe8bf9
+    - OH! And we apparently need to steal the entire connection with SRTP, and use a key passed in the extension.
+    - We'll need a real cert as well, so... we'll need a letsencrypt loop, etc. Probably just a screen, which creates a new cert every week.
+    - We can setup the DNS manually, the IP won't change often
+    
+Display connected to main raspberry pi, which shows the live video?
 
 Maybe nice to have
     Lower latency live stream

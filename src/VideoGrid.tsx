@@ -6,48 +6,71 @@ import { css } from "typesafecss";
 import { observable } from "./misc/mobxTyped";
 import { getThumbnailURL } from "./thumbnail";
 import { getFileStorage } from "./storage/FileFolderAPI";
-import { getLiveVideos } from "./videoHelpers";
 import { formatNumber, formatTime } from "socket-function/src/formatting/format";
 import { DiskCollectionRaw } from "./storage/DiskCollection";
 import { Button } from "./Button";
-import { list } from "socket-function/src/misc";
+import { binarySearchBasic, list } from "socket-function/src/misc";
 import { Icon } from "./icons";
+import { getVideoIndexSynced } from "./videoLookup";
+import { getTimeFolder } from "./frameEmitHelpers";
+import { getSpeed } from "./urlParams";
 
 const incrementTypeURL = new URLParamStr("inc");
+const gridSizeURL = new URLParamStr("gridSize");
 
 @observer
 export class VideoGrid extends preact.Component<{
     videoManager: VideoManager;
 }> {
     synced = observable({
-        expanded: false,
+        expanded: true,
+        viewTime: 0,
     });
     render() {
         let videoManager = this.props.videoManager;
         let state = videoManager.state;
         let currentIncrement: IncrementType = incrementTypeURL.value as any || "day";
         let subIncrement = incrementSubs[currentIncrement].subType;
-        let currentTime = state.curPlayingTime;
+        let currentTime = this.synced.viewTime || state.curPlayingTime;
         let subRanges = getIncrementSubRanges(currentTime, currentIncrement);
 
-        let videos = getLiveVideos();
-        type Video = typeof videos[0];
-        let videoLookup = new Map<unknown, Video[]>();
-        let videoIndex = 0;
-        for (let subRange of subRanges.ranges) {
-            let matchingVideos: Video[] = [];
-            while (videoIndex < videos.length) {
-                let video = videos[videoIndex];
-                if (video.time > subRange.end) break;
-                if (video.endTime < subRange.start) {
-                    videoIndex++;
-                    continue;
-                }
-                matchingVideos.push(video);
-                videoIndex++;
+        function filterToRange<T extends { startTime: number; endTime: number }>(values: T[], range: { start: number; end: number }): T[] {
+            let rangeIndexStart = binarySearchBasic(values, x => x.startTime, range.start);
+            if (rangeIndexStart < 0) rangeIndexStart = ~rangeIndexStart - 1;
+            rangeIndexStart = Math.max(0, rangeIndexStart);
+            // Continue until we find a range that includes the start
+            while (rangeIndexStart < values.length) {
+                if (values[rangeIndexStart].endTime > range.start) break;
+                rangeIndexStart++;
             }
-            videoLookup.set(subRange, matchingVideos);
+            // The end is starts after the range end
+            let rangeIndexEnd = rangeIndexStart;
+            while (rangeIndexEnd < values.length) {
+                if (values[rangeIndexEnd].startTime >= range.end) break;
+                rangeIndexEnd++;
+            }
+            return values.slice(rangeIndexStart, rangeIndexEnd);
         }
+
+        function getRangeData(range: { start: number; end: number }) {
+            let index = getVideoIndexSynced();
+            let curRanges = filterToRange(index.ranges, range);
+            let videos = filterToRange(index.flatVideos, range);
+            let ranges = curRanges.map(x => ({
+                time: Math.max(range.start, x.startTime),
+                endTime: Math.min(range.end, x.endTime),
+                base: x
+            }));
+            let thumb = "";
+            for (let video of videos.slice(0, 20)) {
+                if (video.startTime < range.start) continue;
+                thumb = getThumbnailURL({ file: video.file, maxDimension: gridSize, retryErrors: true });
+                if (thumb === "loading") break;
+                if (thumb.startsWith("data:")) break;
+            }
+            return { thumb, ranges, thumbIsGood: thumb.startsWith("data:") };
+        }
+
 
         if (!this.synced.expanded) {
             let overviewIncrement = "day" as const;
@@ -58,30 +81,35 @@ export class VideoGrid extends preact.Component<{
                 let endIndex = Math.min(previewRanges.ranges.length, centerIndex + 3);
                 previewRanges.ranges = previewRanges.ranges.slice(startIndex, endIndex);
             }
+
+            let gridUI = previewRanges.ranges.map(range => {
+                let { thumb, thumbIsGood } = getRangeData(range);
+                if (!thumbIsGood) return undefined;
+                let isCenter = range.start <= currentTime && currentTime < range.end;
+                return (
+                    <div
+                        className={
+                            css.relative.minWidth(100).minHeight(100)
+                            + (isCenter && css.borderColor("hsl(103, 90%, 73%)", "important"))
+                        }
+                    >
+                        <img
+                            className={css.pos(0, 0).maxWidth(300).maxHeight(300)}
+                            src={thumb}
+                        />
+                        <div className={css.hsla(0, 0, 20, 0.65).pad2(6, 4).relative.absolute.top0.left0}>
+                            {formatSingleIncrement(range.start, incrementSubs[overviewIncrement].subType)}
+                        </div>
+                    </div>
+                );
+            }).filter(x => x);
             return (
-                <div className={css.relative.vbox(10).pad2(10).margins2(10).width(`calc(100% - 20px)`).bord2(0, 0, 20, 1).center}>
+                <div className={css.relative.vbox(10).pad2(10).margins2(10).width(`calc(100% - 20px)`).center}>
                     <div className={css.hbox(10).wrap}>
-                        {previewRanges.ranges.map(range => {
-                            let thumb = getThumbnailURL({ startTime: range.start, endTime: range.end, maxDimension: 200, retryErrors: true });
-                            if (!thumb.startsWith("data:")) return undefined;
-                            let isCenter = range.start <= currentTime && currentTime < range.end;
-                            return (
-                                <div
-                                    className={
-                                        css.bord(1, "white").relative.minWidth(100).minHeight(100)
-                                        + (isCenter && css.borderColor("hsl(103, 90%, 73%)", "important"))
-                                    }
-                                >
-                                    <img
-                                        className={css.pos(0, 0).maxWidth(300).maxHeight(300)}
-                                        src={thumb}
-                                    />
-                                    <div className={css.hsla(0, 0, 20, 0.65).pad2(6, 4).relative.absolute.top0.left0}>
-                                        {formatSingleIncrement(range.start, incrementSubs[overviewIncrement].subType)}
-                                    </div>
-                                </div>
-                            );
-                        })}
+                        {gridUI}
+                        {gridUI.length === 0 &&
+                            <h1>(No videos in range, click to search for video)</h1>
+                        }
                     </div>
                     <div
                         className={css.absolute.pos(0, 0).fillBoth.background("hsl(0, 0%, 50%)", "hover").opacity(0.3).pointer}
@@ -94,9 +122,11 @@ export class VideoGrid extends preact.Component<{
             );
         }
 
+        let gridSize = +gridSizeURL.value || 200;
+
         return (
-            <div className={css.vbox(10).pad2(10).margins2(10).width(`calc(100% - 20px)`).bord2(0, 0, 20, 1)}>
-                <div className={css.hbox(20).fillWidth}>
+            <div className={css.vbox(10).pad2(10).margins2(10).width(`calc(100% - 20px)`).hsl(0, 0, 10).minHeight(0)}>
+                <div className={css.hbox(20).fillWidth.minHeight(0)}>
                     <div
                         className={
                             css.size(50, "100%").center
@@ -107,7 +137,7 @@ export class VideoGrid extends preact.Component<{
                                 .colorhsl(0, 0, 70)
                                 .pad2(0, 10)
                         }
-                        onClick={() => state.curPlayingTime = getPrevIncrement(currentTime, currentIncrement)}
+                        onClick={() => this.synced.viewTime = getPrevIncrement(currentTime, currentIncrement)}
                     >
                         {Icon.chevronDoubleLeft()}
                         <div className={css.marginAuto} />
@@ -115,21 +145,22 @@ export class VideoGrid extends preact.Component<{
                         <div className={css.marginAuto} />
                         {Icon.chevronDoubleLeft()}
                     </div>
-                    <div className={css.vbox(20).fillWidth}>
+                    <div className={css.vbox(20).fillWidth.minHeight(0).fillHeight}>
                         <div className={
                             css.display("grid")
                                 .gridTemplateColumns("1fr 2fr 1fr")
                                 .fillWidth
+                                .flexShrink0
                         }>
-                            <div className={css.fillWidth.hbox(10)}>
+                            <div className={css.hbox(10)}>
                                 <b>Time Breakdown</b>
-                                {renderIncrements.map(inc =>
+                                {(["year", "month", "week", "day", "hour", "minute2"] as const).map(inc =>
                                     <Button
                                         lightness={inc === currentIncrement ? 10 : -30}
                                         onClick={() => incrementTypeURL.value = inc}
                                         invertHover={inc !== currentIncrement}
                                     >
-                                        {inc}
+                                        {incrementSubs[inc].subType.toUpperCase()}
                                     </Button>
                                 )}
                             </div>
@@ -145,47 +176,53 @@ export class VideoGrid extends preact.Component<{
                                     )}
                                 </div>
                             </div>
-                            <div className={css.fillWidth.vbox(20).justifyContent("end")}>
-
+                            <div className={css.fillWidth.hbox(20).justifyContent("end")}>
+                                <div className={css.hbox(10)}>
+                                    <b>Preview Size</b>
+                                    {[100, 200, 400, 600, 800, 1200, 1600, 1800, 2000, 2400].map(size =>
+                                        <Button
+                                            hue={180}
+                                            lightness={gridSize === size ? 0 : -30}
+                                            onClick={() => gridSizeURL.value = size + ""}
+                                            invertHover={gridSize !== size}
+                                        >
+                                            {size}
+                                        </Button>
+                                    )}
+                                </div>
                             </div>
                         </div>
-                        <div className={css.hbox(10).wrap}>
+                        <div className={css.hbox(10).pad2(0, 10).wrap.overflowAuto}>
                             {subRanges.ranges.map(range => {
-                                let thumb = getThumbnailURL({ startTime: range.start, endTime: range.end, maxDimension: 200, retryErrors: true });
                                 let rangeRange = range.end - range.start;
-                                let ranges = videoLookup.get(range) || [];
-                                let joinGap = rangeRange * 0.001;
-                                for (let i = ranges.length - 1; i >= 1; i--) {
-                                    if ((ranges[i].time - ranges[i - 1].endTime) < joinGap) {
-                                        ranges[i - 1].endTime = ranges[i].endTime;
-                                        ranges.splice(i, 1);
-                                    }
-                                }
-                                // Clamp ranges to range.start/range.end
-                                for (let r of ranges) {
-                                    r.time = Math.max(r.time, range.start);
-                                    r.endTime = Math.min(r.endTime, range.end);
-                                }
+
+                                let { ranges, thumb, thumbIsGood } = getRangeData(range);
+
                                 let isCenter = range.start <= currentTime && currentTime < range.end;
                                 return (
                                     <div
                                         className={
-                                            css.bord(1, "white").relative.minWidth(100).minHeight(100)
+                                            css.relative.minWidth(gridSize / 2).minHeight(gridSize / 2)
                                                 .pointer
                                             + (isCenter && css.borderColor("hsl(103, 90%, 73%)", "important"))
+                                            + (!thumbIsGood && css.bord(1, "hsl(0, 0%, 60%)"))
+                                            + css.outline("1px solid hsl(0, 0%, 60%)", "hover")
                                         }
-                                        title={`${formatFullIncrement(range.start, subIncrement, "long")} - ${formatFullIncrement(range.end, subIncrement, "long")}`}
-                                        onClick={() => videoManager.seekToTime(range.start)}
-                                        {...{
-                                            onAuxClick: (e: preact.JSX.TargetedMouseEvent<HTMLAnchorElement>) => {
+                                        title={`${thumb && !thumbIsGood && `(${thumb})` || ""} ${formatFullIncrement(range.start, subIncrement, "long")} ${getTimeFolder({ time: range.start, speedMultiplier: getSpeed() })}`}
+                                        onClick={(e) => videoManager.seekToTime(range.start)}
+                                        onMouseDown={e => {
+                                            // If right click
+                                            if (e.button === 1) {
                                                 e.preventDefault();
+                                                this.synced.viewTime = range.start;
                                                 incrementTypeURL.value = subIncrement;
-                                            },
+                                                return;
+                                            }
                                         }}
                                     >
-                                        {thumb.startsWith("data:") &&
+                                        {thumbIsGood &&
                                             <img
-                                                className={css.pos(0, 0).maxWidth(300).maxHeight(300)}
+                                                className={css.pos(0, 0).maxWidth(gridSize * 2).maxHeight(gridSize * 2)}
                                                 src={thumb}
                                             /> || undefined
                                         }
@@ -203,6 +240,9 @@ export class VideoGrid extends preact.Component<{
                                     </div>
                                 );
                             })}
+                            {subRanges.ranges.length === 0 &&
+                                <h1>(No videos in range)</h1>
+                            }
                         </div>
                         <div
                             className={
@@ -213,8 +253,12 @@ export class VideoGrid extends preact.Component<{
                                     .pointer
                                     .colorhsl(0, 0, 70)
                                     .pad2(10, 0)
+                                    .flexShrink0
                             }
-                            onClick={() => this.synced.expanded = false}
+                            onClick={() => {
+                                this.synced.expanded = false;
+                                this.synced.viewTime = 0;
+                            }}
                         >
                             {Icon.chevronDoubleUp()}
                         </div>
@@ -229,7 +273,7 @@ export class VideoGrid extends preact.Component<{
                                 .colorhsl(0, 0, 70)
                                 .pad2(0, 10)
                         }
-                        onClick={() => state.curPlayingTime = getNextIncrement(currentTime, currentIncrement)}
+                        onClick={() => this.synced.viewTime = getNextIncrement(currentTime, currentIncrement)}
                     >
                         {Icon.chevronDoubleRight()}
                         <div className={css.marginAuto} />
@@ -243,15 +287,15 @@ export class VideoGrid extends preact.Component<{
     }
 }
 
-type IncrementType = "second" | "minute" | "minute2" | "hour" | "hour6" | "day" | "week" | "week2" | "month" | "year";
-let renderIncrements: IncrementType[] = ["year", "month", "week", "day", "hour", "minute", "second"];
+type IncrementType = "second" | "minute" | "minute2" | "second2" | "hour" | "hour6" | "day" | "week" | "week2" | "month" | "year";
 let incrementSubs: {
     [key in IncrementType]: { type: IncrementType; subType: IncrementType; }
 } = {
     second: { type: "second", subType: "second" },
+    second2: { type: "second2", subType: "second2" },
     minute: { type: "minute", subType: "second" },
-    minute2: { type: "minute2", subType: "second" },
-    hour: { type: "hour", subType: "minute" },
+    minute2: { type: "minute2", subType: "second2" },
+    hour: { type: "hour", subType: "minute2" },
     hour6: { type: "hour6", subType: "hour" },
     day: { type: "day", subType: "hour" },
     week: { type: "week", subType: "hour6" },
@@ -263,6 +307,14 @@ function getStartOfIncrement(time: number, type: IncrementType): number {
     let d = new Date(time);
     if (type === "second") {
         d.setMilliseconds(0);
+    } else if (type === "second2") {
+        d.setMilliseconds(0);
+        // Round to nearest 2 seconds
+        let seconds = d.getSeconds();
+        let half = seconds % 2 === 1;
+        if (half) {
+            d.setSeconds(seconds - 1);
+        }
     } else if (type === "minute") {
         d.setSeconds(0);
         d.setMilliseconds(0);
@@ -321,11 +373,14 @@ function getStartOfIncrement(time: number, type: IncrementType): number {
         d.setMilliseconds(0);
         d.setMonth(0);
         d.setDate(1);
+    } else {
+        let unhandled: never = type;
     }
     return d.getTime();
 }
 function incrementMedianSize(type: IncrementType): number {
     if (type === "second") return 1000;
+    if (type === "second2") return 2000;
     if (type === "minute") return 60000;
     if (type === "minute2") return 60000 * 2;
     if (type === "hour") return 3600000;
@@ -387,6 +442,7 @@ function formatSingleIncrement(time: number, type: IncrementType, long?: "long")
     let days = long ? longDays : shortDays;
     let months = long ? longMonths : shortMonths;
     if (type === "second") return hourMinuteSecond(time);
+    if (type === "second2") return hourMinuteSecond(time);
     if (type === "minute") return hourMinuteSecond(time);
     if (type === "minute2") return formatSingleIncrement(time, "minute");
     if (type === "hour") return hourMinuteSecond(time);

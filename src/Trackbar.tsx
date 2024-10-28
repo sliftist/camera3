@@ -5,9 +5,8 @@ import { URLParamStr } from "./misc/URLParam";
 import { css } from "typesafecss";
 import { sort, timeInDay, timeInHour } from "socket-function/src/misc";
 import { formatDate } from "socket-function/src/formatting/format";
-import { FileStorageSynced } from "./storage/DiskCollection";
-import { getVideosSync, parseVideoKey } from "./videoHelpers";
 import { observable } from "./misc/mobxTyped";
+import { getVideoIndexSynced } from "./videoLookup";
 
 // NOTE: We intentionally don't allow using a larger time range of the trackbar.
 //  It is much better to use the thumbnail grid to navigate rather than scrubbing
@@ -94,32 +93,8 @@ export class Trackbar extends preact.Component<{
             let dayOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()];
             return `${year} ${month} ${day} (${dayOfWeek})`;
         }
-        let videoSegment = new Map<string, {
-            start: number;
-            end: number;
-            buffered?: boolean;
-        }>();
-        for (let video of getVideosSync()) {
-            if (video.endTime < startTime || video.time > endTime) continue;
-            videoSegment.set(video.file, { start: video.time, end: video.endTime });
-        }
-        for (let video of videoManager.getLoadedVideos()) {
-            let obj = videoSegment.get(video.file);
-            if (!obj) continue;
-            obj.buffered = true;
-        }
-        let minSegmentGap = TRACKBAR_RANGE / 1000;
-        let segmentValues = Array.from(videoSegment.values());
-        sort(segmentValues, x => x.start);
-        for (let i = segmentValues.length - 1; i > 0; i--) {
-            let cur = segmentValues[i - 1];
-            let target = segmentValues[i];
-            let dist = target.start - cur.end;
-            if (dist < minSegmentGap && cur.buffered === target.buffered) {
-                cur.end = target.end;
-                segmentValues.splice(i, 1);
-            }
-        }
+        let videoSegments = getVideoIndexSynced().ranges;
+
 
         let playState = videoManager.getPlayState();
 
@@ -138,17 +113,18 @@ export class Trackbar extends preact.Component<{
                     )
                 }
             >
-                {segmentValues.map(segment =>
+                {videoSegments.map(segment =>
                     <div
                         className={
                             css.absolute
-                                .left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
+                                .left(`${(segment.startTime - startTime) / TRACKBAR_RANGE * 100}%`)
                                 // Minimum of 1px, otherwise small segments become invisible, and if all segments are small...
                                 //  nothing renders.
-                                .width(`calc(max(1px, ${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%))`)
+                                .width(`calc(max(1px, ${segment.duration / TRACKBAR_RANGE * 100}%))`)
                                 .fillHeight
                                 .opacity(0.8)
-                            + (segment.buffered ? css.hsl(120, 50, 50) : css.hsl(120, 0, 50))
+                                .hsl(120, 0, 50)
+                            //+ (segment.buffered ? css.hsl(120, 50, 50) : css.hsl(120, 0, 50))
                         }
                     />
                 )}
@@ -175,6 +151,7 @@ export class Trackbar extends preact.Component<{
                                 .left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
                                 .fillHeight
                                 .center
+                                .borderLeft("1px solid hsl(0, 0%, 80%)")
                         }>
                             <div className={
                                 css.absolute.left(0).top("200%").height("100%").width(1).offsetx("-50%").background("white")
@@ -191,6 +168,7 @@ export class Trackbar extends preact.Component<{
                                 .left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
                                 .width(`${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%`)
                                 .fillHeight
+                            + (new Date(segment.start).getHours() === 0 && css.borderLeft("1px solid hsl(0, 0%, 0%)"))
                         }>
                             <div
                                 className={

@@ -34,7 +34,7 @@ const setPendingBase = throttleFunction(500, function setPendingBase() {
             }
             delete watchState.pending[group];
         } else {
-            console.log("setPending", group, message);
+            //console.log("setPending", group, message);
             if (!(group in watchState.pending)) {
                 pendingLastSets.set(group, Date.now());
             }

@@ -8,6 +8,7 @@ export type IStorageSync<T> = {
     remove(key: string): void;
     getKeys(): string[];
     getInfo(key: string): { size: number; lastModified: number } | undefined;
+    reset(): Promise<void>;
 };
 export type IStorage<T> = {
     get(key: string): Promise<T | undefined>;
@@ -18,6 +19,7 @@ export type IStorage<T> = {
         size: number;
         lastModified: number;
     }>;
+    reset(): Promise<void>;
 };
 // NOTE: In the file system some characters are disallowed, and some characters do special things
 //  (/ makes a folder). And there are even more rules, such as lengths per folder, etc, etc.
@@ -32,4 +34,5 @@ export type IStorageRaw = {
         size: number;
         lastModified: number;
     }>;
+    reset(): Promise<void>;
 };

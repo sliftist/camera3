@@ -8,13 +8,16 @@ import { TransactionStorage } from "./TransactionStorage";
 import { PendingStorage } from "./PendingStorage";
 
 export class DiskCollection<T> implements IStorageSync<T> {
-    constructor(private collectionName: string) { }
+    constructor(
+        private collectionName: string,
+        private writeDelay?: number,
+    ) { }
     async initStorage(): Promise<IStorage<T>> {
         if (isNode()) return undefined as any;
         let fileStorage = await getFileStorage();
         let collections = await fileStorage.folder.getStorage("collections");
         let curCollection = await collections.folder.getStorage(this.collectionName);
-        let baseStorage = new TransactionStorage(curCollection, this.collectionName);
+        let baseStorage = new TransactionStorage(curCollection, this.collectionName, this.writeDelay);
         return new JSONStorage<T>(baseStorage);
     }
     private baseStorage = this.initStorage();
@@ -50,16 +53,23 @@ export class DiskCollection<T> implements IStorageSync<T> {
     public getInfo(key: string) {
         return this.synced.getInfo(key);
     }
+
+    public async reset() {
+        await this.synced.reset();
+    }
 }
 
 export class DiskCollectionPromise<T> implements IStorage<T> {
-    constructor(private collectionName: string) { }
+    constructor(
+        private collectionName: string,
+        private writeDelay?: number,
+    ) { }
     async initStorage(): Promise<IStorage<T>> {
         if (isNode()) return undefined as any;
         let fileStorage = await getFileStorage();
         let collections = await fileStorage.folder.getStorage("collections");
         let curCollection = await collections.folder.getStorage(this.collectionName);
-        let baseStorage = new TransactionStorage(curCollection, this.collectionName);
+        let baseStorage = new TransactionStorage(curCollection, this.collectionName, this.writeDelay);
         return new JSONStorage<T>(baseStorage);
     }
     private synced = (
@@ -83,6 +93,10 @@ export class DiskCollectionPromise<T> implements IStorage<T> {
     public async getInfo(key: string) {
         return await this.synced.getInfo(key);
     }
+
+    public async reset() {
+        await this.synced.reset();
+    }
 }
 
 export class DiskCollectionRaw implements IStorage<Buffer> {
@@ -91,7 +105,8 @@ export class DiskCollectionRaw implements IStorage<Buffer> {
         if (isNode()) return undefined as any;
         let fileStorage = await getFileStorage();
         let collections = await fileStorage.folder.getStorage("collections");
-        return await collections.folder.getStorage(this.collectionName);
+        let baseStorage = await collections.folder.getStorage(this.collectionName);
+        return baseStorage;
     }
     private synced = (
         new PendingStorage(`Collection (${this.collectionName})`,
@@ -113,6 +128,10 @@ export class DiskCollectionRaw implements IStorage<Buffer> {
     }
     public async getInfo(key: string) {
         return await this.synced.getInfo(key);
+    }
+
+    public async reset() {
+        await this.synced.reset();
     }
 }
 
@@ -141,6 +160,10 @@ export class FileStorageBufferSyncer implements IStorageSync<Buffer> {
 
     public getAsync() {
         return this.synced;
+    }
+
+    public async reset() {
+        await this.synced.reset();
     }
 }
 

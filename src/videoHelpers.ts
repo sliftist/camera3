@@ -123,17 +123,15 @@ export function getVideoStartTime(key: string): number {
 
 
 
-export async function findVideo(time: number): Promise<string> {
+export async function findVideo(time: number): Promise<string | undefined> {
     await getVideoIndexPromise();
     let file = findVideoBase(time);
     if (file) return file;
     await pollVideoFilesNow();
     return findVideoSync(time);
 }
-export function findVideoSync(time: number): string {
-    let file = findVideoBase(time);
-    if (file) return file;
-    return getVideoIndexSynced().flatVideos.at(-1)?.file || "";
+export function findVideoSync(time: number): string | undefined {
+    return findVideoBase(time);
 }
 export function getThumbnailRange(maxDim: number, range: { start: number; end: number; }): string {
     let index = getVideoIndexSynced();
@@ -182,7 +180,9 @@ function findNextVideoBase(time: number): string | undefined {
     let index = binarySearchBasic(videos, x => x.startTime, time);
     if (index < 0) index = ~index - 1;
     let video = videos[index + 1];
-    if (!video) return undefined;
+    if (!video) {
+        return undefined;
+    }
     return video.file;
 }
 
@@ -196,6 +196,7 @@ export async function findNextVideo(time: number): Promise<string | undefined> {
 
 export function estimateFPS(time: number) {
     let currentVideo = findVideoSync(time);
+    if (!currentVideo) return 0;
     let parsed = parseVideoKey(currentVideo);
     if (!parsed) return undefined;
     return parsed.frames / (parsed.endTime - parsed.startTime) * 1000;

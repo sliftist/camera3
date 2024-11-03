@@ -4,53 +4,6 @@ UNFIXABLE BUGS
         - And sometimes it just dies
     - Sometimes /dev/video0 goes away. We can switch, but I think that video crashes as well, etc, etc, until there is nothing let by /dev/video10, which I think is an encoded, which then hangs forever.
 
-1) Fix file scan not working
-    - Crashes and infinitely restarts
-    - So... we should create 1/40th the number of folders AND clean up old folders (eventually)
-2) Investigate gaps in highspeed playback
-    - The gaps exist in the 1x speed data
-    - OH! The %util for that drive is near 100%...
-        - Or... it was? Is the browser just reading way too much? Hmm... maybe?
-    - MAYBE limit is breaking it?
-3) Implement VideoManager queue
-
-
-Add buttons to adjust the rate up/down by 2x each way
-
-
-
-        todonext;
-        // Play around with seeking a lot more. I SEEMS to work okay, but... if there are ANY issues,
-        //      now would be the best time to fix them...
-        todonext;
-        //  1) Try playing live video
-        //  2) Create gaps, and then make sure it can jump them
-
-
-
-
-Update VideoManager to use a queue to manage operations
-    - Load => .currentTime set => play
-    - Forces things to run in order
-        - ESPECIALLY loading video, as loading in parallel is terrible and causes a lot of lag before we can start playing
-    - BUT, allow clearing the queue
-        - We can break up most operations so cancellation isn't required.
-        - Loading data into the sourceBuffer will require checking to verify it hasn't been detached.
-        - AND, this should make seeking within loaded buffers instant
-    - Log the queue, so we can tell what it's doing, when it's done, and what it will do next
-    - UPDATE the gap jumper to look at the queue, so it only jumps gaps when we're idle
-        - AND update it to just poll, so we never miss jumping gaps
-        - Verify it on some gaps (and we can even create some gaps to test it)
-
-ALSO, fix preview on page load not showing
-    - Maybe this will just be fixed anyways? But... I don't think so. I think when we load video and then set currentTime the preview isn't showing until we start playing. Maybe we need to play for a second then stop playing?
-(When we switch speeds the preview should work somewhat well)
-
-VERIFY via playing our choppy incorrectly timed video, which might require gap jumping (although it might also play normally...)
-
-
-
-
 
 todonext
 Check io errors after running for a while
@@ -58,8 +11,8 @@ Check io errors after running for a while
     Last was at "Fri Nov  1 19:10:59 2024", so... we shouldn't get anymore after that!
 
 
-
 Serverside python activity script (static video deletion)
+    - activity.ts, command4.txt
     - Find activity, and delete video with no activity (keeping a padding of minimum number of frames of non-activity around the activity)
     - FIRST, just log the activity ranges, and manually verify them
     - Take static times in 60x and use it to delete static 1x video
@@ -77,6 +30,11 @@ Pre-thumbnail generation
         - Create thumbnail2, which still locally caches, but then gets it off the adjacent jpeg (and maybe falls back to "thumbnail.ts" if there is no adjacent jpeg)
     - Make sure to gc these in fix.ts, when we limit size
         - AND in activity deletion
+
+
+Browser video/file caching
+    - We should be able to store 1GB easily
+        - Maybe... 1GB per speed (this will mean higher speeds will be able to cache ALL the video)
 
 
 RTP streaming

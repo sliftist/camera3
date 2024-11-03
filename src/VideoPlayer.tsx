@@ -108,14 +108,11 @@ export class VideoPlayer extends preact.Component {
                     }>
                         <div>
                             {(() => {
-                                let curVideo = findVideoSync(state?.targetTimeThrottled || 0);
-                                let videoObj = decodeVideoKey(curVideo);
+                                let videoObj = this.videoManager?.getCurrentVideo();
                                 if (!videoObj) return undefined;
-                                let playbackDuration = (videoObj.endTime - videoObj.startTime) / getSpeed() / getVideoRate();
+                                let playbackDuration = (videoObj.duration) / getSpeed() / getVideoRate();
                                 let curFPS = videoObj.frames / playbackDuration * 1000;
-                                let loadedVideos = this.videoManager?.getLoadedVideos();
-                                let loadedVideo = loadedVideos?.find(x => x.file === curVideo);
-                                let curBitRate = loadedVideo && (loadedVideo.size / playbackDuration * 1000);
+                                let curBitRate = videoObj.size / playbackDuration * 1000;
                                 return (
                                     <div>
                                         {curFPS.toFixed(2)} FPS /// {formatNumber(curBitRate)}B/s

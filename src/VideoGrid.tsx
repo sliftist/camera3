@@ -154,8 +154,8 @@ export class VideoGrid extends preact.Component<{
                                             css.relative.minWidth(gridSize / 2).minHeight(gridSize / 2)
                                                 .pointer
                                                 .vbox(2).center
-                                            + (isCenter && css.borderColor("hsl(103, 90%, 73%)", "important"))
-                                            + (!thumbIsGood && css.bord(1, "hsl(0, 0%, 60%)"))
+                                            + (isCenter && css.outline("1px solid hsl(103, 90%, 73%)", "important"))
+                                            // + (!thumbIsGood && css.bord(1, "hsl(0, 0%, 60%)"))
                                             // + css.outline("1px solid hsl(0, 0%, 60%)", "hover")
                                         }
                                         title={`${thumb && !thumbIsGood && `(${thumb})` || ""} ${formatFullIncrement(range.start, subIncrement, "long")} ${getTimeFolder({ time: range.start, speedMultiplier: getSpeed() })}`}

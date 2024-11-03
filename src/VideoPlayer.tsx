@@ -8,11 +8,11 @@ import { PromiseObj, throttleFunction, timeInMinute } from "socket-function/src/
 import { css } from "typesafecss";
 import { formatDateTime, formatNumber, formatTime } from "socket-function/src/formatting/format";
 import { VideoManager } from "./VideoManager";
-import { addVideoHotkeys } from "./videoHotkeys";
 import { Trackbar } from "./Trackbar";
 import { VideoGrid } from "./VideoGrid";
 import { Button } from "./Button";
 import { getFileStorage } from "./storage/FileFolderAPI";
+import { getSpeed, getVideoRate } from "./urlParams";
 
 let playTimeURL = new URLParamStr("t");
 const updatePlayTime = throttleFunction(5000, (time: number) => {
@@ -20,15 +20,13 @@ const updatePlayTime = throttleFunction(5000, (time: number) => {
 });
 let playingURL = new URLParamStr("p");
 
-let playVideoBase = (file: string) => { };
-export function playVideo(file: string) {
-    playVideoBase(file);
-}
 
 @observer
 export class VideoPlayer extends preact.Component {
     videoManager: VideoManager | undefined;
+    video: HTMLVideoElement | null = null;
     onVideoElement = async (newVideo: HTMLVideoElement) => {
+        this.video = newVideo;
         async function getVideoBuffer(file: string): Promise<Buffer | undefined> {
             let storage = await getFileStorage();
             let handle = await storage.folder.getNestedFileHandle(file.split("/"));
@@ -36,7 +34,6 @@ export class VideoPlayer extends preact.Component {
             let fileHandle = await handle.getFile();
             return Buffer.from(await fileHandle.arrayBuffer());
         }
-        addVideoHotkeys(newVideo);
 
         let video = this.videoManager = new VideoManager({
             element: newVideo,
@@ -49,14 +46,7 @@ export class VideoPlayer extends preact.Component {
             getVideoStartTime,
             getVideoBuffer,
         });
-        playVideoBase = async (file: string) => {
-            await video.playVideoTime(getVideoStartTime(file));
-        };
-        // HACK: Set the current time without seeking, so we don't have to load the video.
-        //  In practice loading the video MIGHT be fine, but... when developing it's really
-        //  annoying, as we reload A LOT.
-        video.state.curPlayingTime = video.state.curPlayingTimeThrottled = +playTimeURL.value || Date.now();
-
+        video.seekToTime(+playTimeURL.value || Date.now());
         this.forceUpdate();
 
         // if (playingURL.value) {
@@ -68,13 +58,17 @@ export class VideoPlayer extends preact.Component {
 
     render() {
         let state = this.videoManager?.state;
-        state && void updatePlayTime(state.curPlayingTime);
-        if (!!state?.wantsToPlay !== !!playingURL.value) {
-            if (state?.wantsToPlay) {
+        state && void updatePlayTime(state.targetTimeThrottled);
+        if (!!state?.videoWantsToPlay !== !!playingURL.value) {
+            if (state?.videoWantsToPlay) {
                 playingURL.value = "1";
             } else {
                 playingURL.value = "";
             }
+        }
+        let rate = getVideoRate();
+        if (this.video && this.video.playbackRate !== rate) {
+            this.video.playbackRate = rate;
         }
         return (
             <div className={css.fillBoth.vbox0.relative + " VideoPlayer"}>
@@ -85,11 +79,10 @@ export class VideoPlayer extends preact.Component {
                         }
                     `}
                 </style>
-                {this.videoManager && <VideoGrid videoManager={this.videoManager} />}
                 {this.videoManager && <VideoHeader manager={this.videoManager} />}
-                <div className={css.fillBoth.minHeight(0).relative.flexShrink(100000) + " VideoPlayer-video"}>
+                <div className={css.fillBoth.minHeight(200).relative.flexShrink(100000) + " VideoPlayer-video"}>
                     <video
-                        className={css.fillBoth.minHeight(0).pointer}
+                        className={css.fillBoth.minHeight(200).pointer}
                         ref={newVideo => {
                             if (!newVideo) return;
                             if (this.videoManager) return;
@@ -103,16 +96,8 @@ export class VideoPlayer extends preact.Component {
                             .hsla(0, 0, 10, 0.8).pad2(10, 4)
                         + " VideoPlayer-info"
                     }>
-                        {
-                            state.segmentsLoading > 0 &&
-                            <div className={
-                                css.hslcolor(-5, 50, 50)
-                            }>
-                                Loading {formatNumber(state.segmentsLoading)} files
-                            </div>
-                        }
                         <div>
-                            Loaded {formatNumber(state.loadedFiles)} / {formatNumber(FileStorageSynced.getKeys().length)} files /// {formatTime(state.curBufferedTime)} /// {formatNumber(state.loadedFrames)} frames /// {formatNumber(state.loadedBytes)}B
+                            Loaded {formatNumber(state.loadedFiles)} / {formatNumber(FileStorageSynced.getKeys().length)} files /// {formatNumber(state.loadedFrames)} frames /// {formatNumber(state.loadedBytes)}B
                         </div>
                     </div>}
                     {state && <div className={
@@ -123,13 +108,14 @@ export class VideoPlayer extends preact.Component {
                     }>
                         <div>
                             {(() => {
-                                let curVideo = findVideoSync(state?.curPlayingTimeThrottled || 0);
+                                let curVideo = findVideoSync(state?.targetTimeThrottled || 0);
                                 let videoObj = decodeVideoKey(curVideo);
                                 if (!videoObj) return undefined;
-                                let curFPS = videoObj.frames / (videoObj.endTime - videoObj.startTime) * 1000;
+                                let playbackDuration = (videoObj.endTime - videoObj.startTime) / getSpeed() / getVideoRate();
+                                let curFPS = videoObj.frames / playbackDuration * 1000;
                                 let loadedVideos = this.videoManager?.getLoadedVideos();
                                 let loadedVideo = loadedVideos?.find(x => x.file === curVideo);
-                                let curBitRate = loadedVideo && (loadedVideo.size / loadedVideo.duration * 1000);
+                                let curBitRate = loadedVideo && (loadedVideo.size / playbackDuration * 1000);
                                 return (
                                     <div>
                                         {curFPS.toFixed(2)} FPS /// {formatNumber(curBitRate)}B/s
@@ -151,7 +137,7 @@ export class VideoHeader extends preact.Component<{
 }> {
     render() {
         let manager = this.props.manager;
-        let isLive = Date.now() - manager.state.curPlayingTimeThrottled < timeInMinute * 2;
+        let isLive = Date.now() - manager.state.targetTimeThrottled < timeInMinute * 2;
         let playState = manager.getPlayState();
         return (
             <div className={css.fillWidth.hbox(10).center.marginBottom(10)}>
@@ -166,7 +152,7 @@ export class VideoHeader extends preact.Component<{
                     {playState}
                 </Button>
                 <input
-                    value={formatDateTimeForInput(manager.state.curPlayingTimeThrottled)}
+                    value={formatDateTimeForInput(manager.state.targetTimeThrottled)}
                     type="datetime-local"
                     onChange={e => {
                         let date = new Date(e.currentTarget.value);

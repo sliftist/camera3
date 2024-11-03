@@ -61,9 +61,11 @@ export type VideoIndex = {
         startTime: number;
         endTime: number;
         duration: number;
+        size: number;
         videos: VideoFileObj[];
     }[];
     flatVideos: VideoFileObj[];
+    totalSize: number;
 };
 let videoIndexCache: {
     index: VideoIndex;
@@ -87,6 +89,7 @@ export function getVideoIndexSynced(): VideoIndex {
     let videoIndex: VideoIndex = {
         ranges: [],
         flatVideos: [],
+        totalSize: 0,
     };
 
     let maxGap = getRangeMaximumGap();
@@ -116,15 +119,18 @@ export function getVideoIndexSynced(): VideoIndex {
         // Either add to the last range, or make a new range
         let lastRange = videoIndex.ranges.at(-1);
         if (!lastRange || lastRange.endTime + maxGap < file.startTime) {
-            lastRange = { startTime: file.startTime, endTime: file.endTime, duration: 0, videos: [] };
+            lastRange = { startTime: file.startTime, endTime: file.endTime, duration: 0, size: 0, videos: [] };
             videoIndex.ranges.push(lastRange);
         }
         lastRange.endTime = file.endTime;
+        lastRange.size += file.size;
         lastRange.videos.push(file);
     }
     for (let range of videoIndex.ranges) {
         range.duration = range.endTime - range.startTime;
     }
+
+    videoIndex.totalSize = videoIndex.ranges.reduce((acc, x) => acc + x.size, 0);
 
     // 3) Create flatVideos
     videoIndex.flatVideos = allFiles;
@@ -179,6 +185,17 @@ async function updateFolderNow(storage: FileStorage, folder: string) {
     files = files.filter(isVideoFile).filter(parseVideoKey);
     files = files.map(x => folder + x);
     let newFilesSet = new Set(files);
+    // Verify the folder obeys the maximum change time
+    if (false as boolean) {
+        let maxChangeTime = getDirMaximumChangeTime(folder);
+        for (let file of files) {
+            let info = await storage.getInfo(file);
+            if (info?.lastModified || 0 > maxChangeTime) {
+                console.log(`File ${file} changed at ${info?.lastModified} > ${maxChangeTime}, which is invalid.`);
+                debugger;
+            }
+        }
+    }
     let prevFiles = folderPathCacheMemory.get(folder);
     if (prevFiles) {
         for (let file of prevFiles) {
@@ -201,6 +218,8 @@ async function updateFolderNow(storage: FileStorage, folder: string) {
     }
     let time = getDirMaximumChangeTime(folder);
     if (Date.now() > time) {
+        let freezeAgo = Date.now() - time;
+        console.log(`Freezing folder ${folder} ${formatTime(freezeAgo)} late`);
         void frozenFolderCache.set(folder, "1");
     }
     return changeCount;
@@ -224,7 +243,9 @@ const slowDeleteRecheckLoop = lazy(async () => {
     runInfinitePoll(1000, recheckLoopOnce);
 });
 
+const lastScanKey = "lastScanned";
 async function recheckLoopOnce() {
+    let time = Date.now();
     for await (let obj of recursiveIterate(await getFileStorage(), "/")) {
         let changeCount = await updateFolderNow(obj.storage, obj.folder);
         if (changeCount > 0) {
@@ -232,6 +253,17 @@ async function recheckLoopOnce() {
         }
         await delay(SLOW_FOLDER_STEP_DELAY);
     }
+    let duration = Date.now() - time;
+    console.log(`Slow recheck loop took ${formatTime(duration)}`);
+    localStorage.setItem(lastScanKey, JSON.stringify({
+        time: Date.now(),
+        duration,
+    }));
+}
+export function getLastScannedInfo(): { time: number; duration: number; } | undefined {
+    let str = localStorage.getItem(lastScanKey);
+    if (!str) return;
+    return JSON.parse(str);
 }
 
 
@@ -303,7 +335,7 @@ const fastPollLoop = lazy(async () => {
         if (!lastRange) continue;
         // Within a minute of the end time is basically live
         let liveTime = lastRange.endTime - timeInMinute;
-        if (manager.state.curPlayingTime >= liveTime) {
+        if (manager.state.targetTime >= liveTime) {
             try {
                 await pollVideoFilesNow();
             } catch (e) {

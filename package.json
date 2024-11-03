@@ -10,7 +10,7 @@
         "watch": "typenode ./watch.ts",
         "serve": "typenode ./serve.ts",
         "deploy": "bash deploy.sh",
-        "xtest": "ssh 10.0.0.76 \"cd ~/camera3 && yarn typenode ./src/alwaysRunning.ts\"",
+        "xtest": "ssh 10.0.0.189 \"cd ~/camera3 && yarn typenode ./src/alwaysRunning.ts\"",
         "test": "typenode ./test.ts",
         "start": "bash start.sh",
         "type": "yarn tsc --noEmit"

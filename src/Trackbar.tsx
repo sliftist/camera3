@@ -3,102 +3,85 @@ import { observer } from "./misc/observer";
 import { VideoManager } from "./VideoManager";
 import { URLParamStr } from "./misc/URLParam";
 import { css } from "typesafecss";
-import { sort, timeInDay, timeInHour } from "socket-function/src/misc";
-import { formatDate } from "socket-function/src/formatting/format";
+import { sort, timeInDay, timeInHour, timeInMinute, timeInSecond } from "socket-function/src/misc";
+import { formatDate, formatTime } from "socket-function/src/formatting/format";
 import { observable } from "./misc/mobxTyped";
 import { getVideoIndexSynced } from "./videoLookup";
-
-// NOTE: We intentionally don't allow using a larger time range of the trackbar.
-//  It is much better to use the thumbnail grid to navigate rather than scrubbing
-//  a large period (the thumbnail grid is literally doing the same thing, except
-//  it's MUCH faster, and lets you see multiple previews at once).
-const TRACKBAR_RANGE = timeInDay;
+import { getSpeed } from "./urlParams";
+import { formatFullIncrement, formatSingleIncrement, getNextIncrement, getPrevIncrement, incrementMedianSize, incrementSubs, IncrementType, incrementUps, VideoGrid } from "./VideoGrid";
+import { speedGroups } from "./constants";
+import { getThumbnailURL } from "./thumbnail";
+import { findVideoSync, getThumbnailRange } from "./videoHelpers";
+import { Icon } from "./icons";
 
 let playingColor = "hsl(120, 50%, 50%)";
 let bufferedColor = "hsl(260, 50%, 50%)";
 let pausedColor = "hsl(120, 40%, 20%)";
+
+let timeOverride = observable({
+    value: 0
+});
 
 @observer
 export class Trackbar extends preact.Component<{
     videoManager: VideoManager;
 }> {
     render() {
+
+        const IMAGE_WIDTH = 200;
+        let increment: IncrementType = "second";
+        {
+            let idealImagePlayTime = timeInSecond * 20;
+            let speed = getSpeed();
+            let idealRealTime = idealImagePlayTime * speed;
+            for (let key of Object.keys(incrementSubs)) {
+                let time = incrementMedianSize(key as IncrementType);
+                if (time > idealRealTime) {
+                    increment = key as IncrementType;
+                    break;
+                }
+            }
+            if (increment === "second") {
+                increment = "decade";
+            }
+        }
+        const TIME_PER_PIXEL = incrementMedianSize(increment) / IMAGE_WIDTH;
+
+        let nextIncrement = incrementUps[increment];
+
+
         let videoManager = this.props.videoManager;
-        videoManager.state.curPlayingTimeThrottled;
+        videoManager.state.targetTimeThrottled;
 
-        let centerTime = videoManager.state.curPlayingTimeThrottled;
+        let centerTime = videoManager.state.targetTime;
 
+        let pixelWidth = window.innerWidth;
+
+        const TRACKBAR_RANGE = pixelWidth * TIME_PER_PIXEL;
         let startTime = centerTime - TRACKBAR_RANGE / 2;
         let endTime = startTime + TRACKBAR_RANGE;
 
-        let smallSegments: {
+
+        let segments: {
             start: number;
             end: number;
         }[] = [];
-        function roundDownToNearestHour(time: number) {
-            // Eh... I guess this works. Gonna suck for people with weird timezones, at which point... we'll
-            //  have to actually fix it (and until then, it's really annoying to test, because we'd have to change our
-            //  system timezone, etc, etc).
-            return Math.floor(time / timeInHour) * timeInHour;
-        }
-        for (let t = startTime; t < endTime + timeInHour; t += timeInHour) {
-            let start = roundDownToNearestHour(t);
-            smallSegments.push({
-                start,
-                end: start + timeInHour,
+        let time = getPrevIncrement(startTime, increment);
+        while (time < endTime) {
+            let nextTime = getNextIncrement(time, increment);
+            segments.push({
+                start: time,
+                end: nextTime,
             });
-        }
-        // Ex, 9pm, etc
-        function formatHour(time: number) {
-            let date = new Date(time);
-            return date.toLocaleString(undefined, {
-                hour: "numeric",
-                hour12: true,
-            });
-        }
-        // 9:00:00 PM
-        function formatHourFull(time: number) {
-            let date = new Date(time);
-            return date.toLocaleString(undefined, {
-                hour: "numeric",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: true,
-            });
+            time = nextTime;
         }
 
-        let majorSegments: {
-            start: number;
-            end: number;
-            day: number;
-        }[] = [];
-        function roundTo6Hours(time: number) {
-            const d = new Date(time);
-            d.setHours(Math.floor(d.getHours() / 6) * 6);
-            return +d;
-        }
-        for (let t = startTime; t < endTime + timeInHour * 6; t += timeInHour * 6) {
-            let start = roundTo6Hours(t);
-            majorSegments.push({
-                start,
-                end: start + timeInHour * 6,
-                day: new Date(start).getDate(),
-            });
-        }
-        function formatDateNice(time: number) {
-            let date = new Date(time);
-            let year = date.getFullYear();
-            let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getMonth()];
-            let day = date.getDate();
-            let dayOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()];
-            return `${year} ${month} ${day} (${dayOfWeek})`;
-        }
         let videoSegments = getVideoIndexSynced().ranges;
-
 
         let playState = videoManager.getPlayState();
 
-        return (
+        return [
+            <VideoGrid videoManager={videoManager} defaultIncrement={nextIncrement} />,
             <div
                 className={
                     css.fillWidth.flexShrink0
@@ -128,91 +111,111 @@ export class Trackbar extends preact.Component<{
                         }
                     />
                 )}
-                <div className={css.fillWidth.hbox(10).center.relative}>
-                    {formatHourFull(centerTime)}
+                <div className={css.fillWidth.hbox(10).center.relative.pad2(4).zIndex(2).pointerEvents("none")}>
+                    <FormatTime time={centerTime} increment={increment} />
+                </div>
+                {!timeOverride.value && <div
+                    className={
+                        css.fillHeight.top(0).width(3).offsetx("-50%")
+                            .pointerEvents("none")
+                            .zIndex(1)
+                            .absolute
+                            .left(`${(centerTime - startTime) / TRACKBAR_RANGE * 100}%`)
+                        + css.background(
+                            videoManager.state.isVideoActuallyPlaying && playingColor
+                            || videoManager.state.videoWantsToPlay && bufferedColor
+                            || pausedColor
+                        )
+                    }
+                />}
+                <div className={css.fillWidth.relative.pointerEvents("none")}>
+                    {segments.map((segment) =>
+                        (() => {
+                            let url = getThumbnailRange(IMAGE_WIDTH, segment);
+                            if (!url.startsWith("data:")) return undefined;
+                            return <div className={
+                                css.absolute.left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
+                                    .width(`${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%`)
+                                //.borderLeft("5px solid hsla(0, 0%, 0%, 0.5)")
+                            }>
+                                <img src={url} className={
+                                    css.objectFit("contain")
+                                        .fillBoth
+                                } />
+                                <span className={
+                                    css.absolute.pos(0, 0).fillBoth.center
+                                        .fontSize(18).boldStyle
+                                }>
+                                    <div className={css.background("hsla(0, 0%, 0%, 0.65)").pad2(4, 2).zIndex(3)}>
+                                        {formatSingleIncrement(segment.start, increment)}
+                                    </div>
+                                </span>
+                            </div>;
+                        })()
+                    )}
+                    {(() => {
+                        // Invisible placeholder to give us the correct height
+                        let url = getThumbnailRange(IMAGE_WIDTH, { start: startTime, end: endTime });
+                        if (!url.startsWith("data:")) url = "";
+                        return <img src={url} className={css.minHeight(100).objectFit("contain").opacity(0).pointerEvents("none")} />;
+                    })()}
+                </div>
+                {videoManager.getLoadedVideos().map(segment =>
                     <div
                         className={
-                            css.height(60).top("100%").width(3).offsetx("-50%")
-                                .zIndex(1)
-                                .absolute
-                                .left(`${(centerTime - startTime) / TRACKBAR_RANGE * 100}%`)
-                            + css.background(
-                                videoManager.state.isPlaying && playingColor
-                                || videoManager.state.wantsToPlay && bufferedColor
-                                || pausedColor
-                            )
+                            css.absolute
+                                .left(`${(segment.time - startTime) / TRACKBAR_RANGE * 100}%`)
+                                .width(`${(segment.duration) / TRACKBAR_RANGE * 100}%`)
+                                .fillHeight
+                                .top(0)
+                                .opacity(0.5)
+                                .hsl(segment.error ? -5 : 260, 50, 50)
                         }
                     />
-                </div>
-                <div className={css.fillWidth.height(20).relative}>
-                    {smallSegments.map(segment =>
-                        <div className={
-                            css.absolute
-                                .left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
-                                .fillHeight
-                                .center
-                                .borderLeft("1px solid hsl(0, 0%, 80%)")
-                        }>
-                            <div className={
-                                css.absolute.left(0).top("200%").height("100%").width(1).offsetx("-50%").background("white")
-                                    .opacity(0.5)
-                            } />
-                            <div className={css.paddingLeft(4)}>{formatHour(segment.start)}</div>
-                        </div>
-                    )}
-                </div>
-                <div className={css.fillWidth.height(24).relative}>
-                    {majorSegments.map((segment) =>
-                        <div className={
-                            css.absolute
-                                .left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
-                                .width(`${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%`)
-                                .fillHeight
-                            + (new Date(segment.start).getHours() === 0 && css.borderLeft("1px solid hsl(0, 0%, 0%)"))
-                        }>
-                            <div
-                                className={
-                                    css.absolute
-                                        .fillBoth
-                                        .hsla(50, 0, segment.day % 2 === 0 ? 7 : 20, 0.75)
-                                        .center
-                                }
-                            >
-                                {formatDateNice(segment.start)}
-                            </div>
-                        </div>
-                    )}
-                </div>
+                )}
                 <ClickIndicator
-                    color={videoManager.state.wantsToPlay && playingColor || pausedColor}
+                    startTime={startTime}
+                    endTime={endTime}
+                    background={videoManager.state.videoWantsToPlay && playingColor || pausedColor}
                     onClick={async e => {
-                        let play = videoManager.state.wantsToPlay;
                         let rect = e.currentTarget.parentElement!.getBoundingClientRect();
                         let x = e.clientX - rect.left;
                         let frac = x / rect.width;
                         console.log({ x, frac });
                         let time = startTime + frac * TRACKBAR_RANGE;
-                        if (videoManager.state.wantsToPlay) {
-                            await videoManager.playVideoTime(time);
-                        } else {
-                            await videoManager.seekToTime(time);
-                        }
+                        videoManager.seekToTime(time);
                     }}
                 />
             </div>
-        );
+        ];
+    }
+}
+
+@observer
+class FormatTime extends preact.Component<{
+    time: number;
+    increment: IncrementType;
+}> {
+    render() {
+        let centerTime = timeOverride.value || this.props.time;
+        return <span>
+            {formatFullIncrement(centerTime, this.props.increment, "long")}
+        </span>;
     }
 }
 
 @observer
 class ClickIndicator extends preact.Component<{
-    color: string;
+    background: string;
     onClick: (e: preact.JSX.TargetedMouseEvent<HTMLDivElement>) => void;
+    startTime: number;
+    endTime: number;
 }> {
     synced = observable({
         mouseFraction: 0,
     });
     render() {
+        let { startTime, endTime } = this.props;
         return (
             <div
                 className={css.fillBoth.absolute.pos(0, 0).pointer}
@@ -220,9 +223,11 @@ class ClickIndicator extends preact.Component<{
                     let rect = e.currentTarget.getBoundingClientRect();
                     let x = e.clientX - rect.left;
                     this.synced.mouseFraction = x / rect.width;
+                    timeOverride.value = startTime + this.synced.mouseFraction * (endTime - startTime);
                 }}
                 onMouseLeave={e => {
                     this.synced.mouseFraction = 0;
+                    timeOverride.value = 0;
                 }}
             >
                 {this.synced.mouseFraction && <div
@@ -232,7 +237,7 @@ class ClickIndicator extends preact.Component<{
                             .width(3)
                             .fillHeight
                             .zIndex(1)
-                            .background(this.props.color)
+                            .background(this.props.background)
                     }
                     onClick={this.props.onClick}
                 /> || undefined}

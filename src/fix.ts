@@ -1,18 +1,12 @@
-import { delay, runInfinitePoll } from "socket-function/src/batching";
-import os, { endianness } from "os";
+import { runInfinitePoll } from "socket-function/src/batching";
 import fs from "fs";
-import { sort, timeInMinute, timeInSecond } from "socket-function/src/misc";
-import { formatNumber, formatTime } from "socket-function/src/formatting/format";
+import { timeInSecond } from "socket-function/src/misc";
+import { formatTime } from "socket-function/src/formatting/format";
 
 import { IdentifyNal, SplitAnnexBVideo } from "mp4-typescript";
-import { decodeVideoKey, encodeVideoKey, joinNALs, parseVideoKey } from "./videoHelpers";
 import { getReadyVideos, emitFrames, videoFolder } from "./frameEmitHelpers";
+import { speedGroups } from "./constants";
 
-
-// NOTE: For anything but 1, we split into keyframes. SO, if there is a keyframe every 30 frames,
-//  we will sample at most 1 out of every 30 frames, making the minimum speed 30x.
-let speedGroups = [1, 60, 60 * 60, 60 * 60 * 24, 60 * 60 * 24 * 14];
-const MAX_DISK_USAGE = 1024 * 1024 * 1024 * 200;
 
 let moveFileDropCount = 0;
 
@@ -100,56 +94,7 @@ async function safeUnlink(file: string) {
     }
 }
 
-async function limitFiles() {
-    let speedFolders = await fs.promises.readdir(videoFolder);
-    speedFolders = speedFolders.filter(x => x.endsWith("x") && !isNaN(+x.slice(0, -1)));
-    sort(speedFolders, x => -x.slice(0, -1));
-
-    let deletedFiles = 0;
-    let deletedBytes = 0;
-
-    let time = Date.now();
-    let sizePerSpeed = MAX_DISK_USAGE / speedFolders.length;
-    let remainingSpeedFolders = speedFolders.length;
-    for (let speedFolder of speedFolders) {
-        remainingSpeedFolders--;
-        let allFiles: { path: string; size: number; startTime: number; }[] = [];
-        for await (let file of recursiveIterate(videoFolder + speedFolder + "/")) {
-            let obj = decodeVideoKey(file.path);
-            if (!obj.startTime) continue;
-            allFiles.push({ path: file.path, size: file.size, startTime: obj.startTime });
-
-            // NOTE: If we run into any issues with lagging the disk, we could add a delay here to slow down iteration
-        }
-        sort(allFiles, x => x.startTime);
-
-        let totalSize = allFiles.reduce((acc, x) => acc + x.size, 0);
-        let excessSize = totalSize - sizePerSpeed;
-        let filesToRemove: string[] = [];
-        while (excessSize > 0) {
-            let file = allFiles.pop();
-            if (!file) break;
-            excessSize -= file.size;
-            deletedFiles++;
-            deletedBytes += file.size;
-            filesToRemove.push(file.path);
-        }
-        for (let file of filesToRemove) {
-            await safeUnlink(file);
-        }
-        if (excessSize < 0) {
-            sizePerSpeed += excessSize / remainingSpeedFolders;
-        }
-    }
-
-    let totalTime = Date.now() - time;
-    if (deletedFiles > 0) {
-        console.log(`Limited files in ${formatTime(totalTime)}, deleted ${deletedFiles} files, ${formatNumber(deletedBytes)}B`);
-    }
-}
-
 async function main() {
     runInfinitePoll(timeInSecond, moveFiles);
-    runInfinitePoll(timeInMinute * 15, limitFiles);
 }
 main().catch(e => console.error(e));

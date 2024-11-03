@@ -1,12 +1,13 @@
 import { MaybePromise } from "socket-function/src/types";
 import { observable } from "./misc/mobxTyped";
-import { PromiseObj, sort, throttleFunction } from "socket-function/src/misc";
-import { runInSerial } from "socket-function/src/batching";
+import { nextId, PromiseObj, sort, throttleFunction, timeInHour } from "socket-function/src/misc";
+import { delay, runInSerial } from "socket-function/src/batching";
 import { H264toMP4 } from "mp4-typescript";
-import { decodeVideoKey, splitNALs } from "./videoHelpers";
-import { formatNumber, formatTime } from "socket-function/src/formatting/format";
-import { getSpeed } from "./urlParams";
+import { decodeVideoKey, parseVideoKey, splitNALs } from "./videoHelpers";
+import { formatDateTime, formatNumber, formatTime } from "socket-function/src/formatting/format";
+import { getSpeed, getVideoRate } from "./urlParams";
 import { recheckFileNow } from "./videoLookup";
+import { setPending } from "./storage/PendingManager";
 
 export type VideoInfo = {
     file: string;
@@ -18,18 +19,40 @@ export type VideoInfo = {
 
     // Maybe not the real durations, but it's our best guess
     duration: number;
+
+    error?: string;
 };
 
 // Unfortunately, we don't have a lot of precision in MP4s. I'd have to check, but I think
 //      some of the timestamps are 32 bit, and if we use a large denominator of 90000 (which we do,
 //      to allow changing frame rates, and easy calculation of the denominator), this only gives
 //      us a few hours (13). We use a smaller number, just to be safe.
-const MAX_PLAYABLE_TIME = 1000 * 60 * 60 * 3;
+//  - Start time isn't 0, because we want to be able to seek backwards without reloading
+//      the source buffer every seek!
+const INTERNAL_START_TIME = timeInHour * 3;
+const INTERNAL_PLAYBACK_LENGTH = timeInHour * 6;
 
 let videoManager: VideoManager | undefined;
 export function getVideoManager() {
     return videoManager;
 }
+
+function formatHourMinuteSecond(time: number) {
+    let hours = Math.floor(time / timeInHour);
+    time -= hours * timeInHour;
+    let minutes = Math.floor(time / timeInHour);
+    time -= minutes * timeInHour;
+    let seconds = time / 1000;
+    let p = (x: number, digits = 0) => {
+        let str = x.toFixed(digits).toString();
+        if (x < 10) {
+            str = "0" + str;
+        }
+        return str;
+    };
+    return `${p(hours)}:${p(minutes)}:${p(seconds, 1)}`;
+}
+
 
 // NOTE: When we first receive video we have to decide upon an epoch time. We should
 //  put this a week or so in the past, as if we try to seek before it, we have to reset
@@ -38,32 +61,24 @@ export function getVideoManager() {
 //      at least weeks of data, so the native trackbar is already dead, and will need to
 //      be written ourselves.
 export class VideoManager {
-    private videoInfos = new Map<string, MaybePromise<VideoInfo>>();
-    public baseTime = 0;
+    private loadedVideos = new Map<string, VideoInfo>();
+
+    private sourceBufferView?: {
+        viewStartTime: number;
+        viewEndTime: number;
+    };
     private sourceBuffer: SourceBuffer | undefined;
-    // The video's playing based on the video player increasing the currentTime. Only happens
-    //  once it plays the first frame. Otherwise we assume we are controlling playback
-    //  (via seeking, etc).
-    private inAutoPlayback = false;
 
     public state = observable({
-        wantsToPlay: false,
-        isPlaying: false,
+        targetTime: 0,
+        targetTimeThrottled: 0,
+        videoWantsToPlay: false,
 
-        curPlayingTime: 0,
-        // Throttled, so it doesn't render so often
-        //  BUT, you should still put it in a component to reduce the amount of extra
-        //      re-rendering.
-        curPlayingTimeThrottled: 0,
-
-        // Buffered in the future, not the past
-        curBufferedTime: 0,
+        isVideoActuallyPlaying: false,
 
         loadedFrames: 0,
         loadedBytes: 0,
         loadedFiles: 0,
-
-        segmentsLoading: 0,
     });
 
     constructor(private config: {
@@ -80,153 +95,294 @@ export class VideoManager {
     }) {
         videoManager = this;
         let video = this.config.element;
-
-        const updatePlayStates = () => {
-            let isVideoPlaying = this.isVideoPlaying();
-            let videoWantsToPlay = this.doesVideoWantToPlay();
-
-            if (this.state.isPlaying !== isVideoPlaying) {
-                this.state.isPlaying = isVideoPlaying;
-            }
-            if (this.state.wantsToPlay !== videoWantsToPlay) {
-                this.state.wantsToPlay = videoWantsToPlay;
-            }
-
-            this.state.curPlayingTime = this.getCurrentPlayTime();
-            void this.updatePlayTimeThrottled();
-        };
+        this.addHotkeys();
 
         let events = ["play", "pause", "ended", "seeking", "seeked", "waiting", "timeupdate", "playing", "canplay", "canplaythrough", "error"];
 
-        let didSeekedCount = 0;
-        let jumpGap = throttleFunction(1000, async () => {
-            if (this.inAutoPlayback) {
-                console.warn("Trying to jump gap in video");
-                await this.seekToNext();
-            }
-        });
-        video.addEventListener("seeked", () => didSeekedCount++);
-        video.addEventListener("waiting", () => {
-            if (!this.doesVideoWantToPlay()) return;
-            let startCount = didSeekedCount;
-            setTimeout(() => {
-                if (didSeekedCount > startCount) return;
-                void jumpGap();
-            }, 200);
-        });
-        video.addEventListener("timeupdate", () => this.onTimeUpdate());
-        video.addEventListener("timeupdate", () => {
-            this.inAutoPlayback = true;
-        });
-        video.addEventListener("seeking", () => this.onSeekingVideo(this.getCurrentPlayTime()));
-        video.addEventListener("play", () => {
-            if (!this.baseTime) {
-                void this.seekToTime(this.state.curPlayingTime);
-            }
-        });
-
         for (let event of events) {
             video.addEventListener(event, () => {
-                console.log("Video event", event);
-                updatePlayStates();
+                this.syncUnderlyingVideoElement({ event });
             });
         }
-    }
-
-    /** Returns the real time (ex, new Date() works on it) of the current playing position */
-    private getCurrentPlayTime(): number {
-        return this.baseTime + this.config.element.currentTime * 1000;
     }
 
     private isVideoPlaying() {
         let video = this.config.element;
         return video.currentTime > 0 && !video.paused && !video.ended && video.readyState > 2;
     }
-    private doesVideoWantToPlay() {
-        return !this.config.element.paused;
-    }
 
-    private onSeekingVideo = throttleFunction(500, async (time: number) => {
-        let video = await this.config.findVideo(time);
-        await this.loadVideo(video);
+    private updateTargetTimeThrottled = throttleFunction(1000, () => {
+        this.state.targetTimeThrottled = this.state.targetTime;
     });
 
-    // Time of video, not time in the future (so if their are jumps, we skip them, and keep loading more)
-    private async bufferVideoByTime(duration: number) {
-        let curTime = this.getCurrentPlayTime();
+    private seekSeqNum = 0;
+    private loadSeqNum = 0;
 
-        let loaded: VideoInfo[] = [];
+    public syncUnderlyingVideoElement(config: {
+        seekToTime?: number;
+        event?: string;
 
-        while (duration > 0) {
-            let next = await this.config.findNextVideo(curTime);
-            if (!next) {
-                break;
-            }
-            let videoInfo = await this.loadVideo(next);
-            loaded.push(videoInfo);
-            duration -= videoInfo.duration;
-            curTime = this.config.getVideoStartTime(next);
+        loadSeqNum?: number;
+    }) {
+        if (config.seekToTime) {
+            this.seekSeqNum++;
+            this.state.targetTime = config.seekToTime;
         }
-        return loaded;
+
+        let element = this.config.element;
+
+        this.state.isVideoActuallyPlaying = this.isVideoPlaying();
+
+        let time = this.state.targetTime;
+        let view = this.sourceBufferView;
+        if (!view || !(view.viewStartTime < time && time < view.viewEndTime)) {
+            let viewStartTime = time - INTERNAL_START_TIME * getSpeed();
+            let viewEndTime = viewStartTime + INTERNAL_PLAYBACK_LENGTH * getSpeed();
+            view = this.sourceBufferView = { viewStartTime, viewEndTime, };
+
+            // Get the source buffer immediately, as we're going to need it shortly
+            void this.getSourceBuffer(time);
+        }
+
+        let loadSeqNum = config.loadSeqNum;
+        let loadedVideo = this.getCurrentVideo();
+        if (loadedVideo) {
+            loadSeqNum = this.seekSeqNum;
+        }
+        if (loadSeqNum && loadSeqNum > this.loadSeqNum && loadSeqNum >= this.seekSeqNum) {
+            // Just loaded data, seek to it, as they couldn't have seeked to it before
+
+            this.loadSeqNum = loadSeqNum;
+            let time = this.state.targetTime;
+
+            let internalTime = (time - view.viewStartTime) / getSpeed() / 1000;
+            // 3 decimal points, so we can handle up to a 999FPS source (2 is 99, which is too small)
+            if (internalTime.toFixed(3) !== element.currentTime.toFixed(3)) {
+                console.warn(`Seek (from ${config.event}) VideoElement.currentTime = ${formatDateTime(time)} (${element.currentTime} to ${internalTime})`);
+                element.currentTime = internalTime;
+            }
+        } else if (this.seekSeqNum === this.loadSeqNum) {
+            // Regular playing, update time in state to match video progression
+            let frac = element.currentTime * 1000 / INTERNAL_PLAYBACK_LENGTH;
+            time = (1 - frac) * view.viewStartTime + frac * view.viewEndTime;
+            this.state.targetTime = time;
+        }
+
+
+        void this.updateTargetTimeThrottled();
+
+
+        if (this.state.videoWantsToPlay && element.paused) {
+            console.log("VideoElement.play()");
+            void element.play();
+        }
+        if (!this.state.videoWantsToPlay && !element.paused) {
+            console.log("VideoElement.pause()");
+            void element.pause();
+        }
+
+        void this.bufferVideo();
+
+
+        // Jump video gaps
+        void ((async () => {
+            if (this.isVideoPlaying()) return;
+            let beforeTime = this.state.targetTime;
+            // HACK: Try to peak beyond the current time. Too short, and you can't view pause on the
+            //  last few frames of video after the video dies (ex, if your power went out). Too long,
+            //  and any issues with currentTime stopping early (ex, if we are off by a frame in our
+            //  time estimate), and the gap jumping won't work.
+            let video = await this.config.findVideo(beforeTime + 0.1);
+            let nextVideo = await this.config.findNextVideo(beforeTime);
+            // If the state changed abort.
+            if (this.state.targetTime !== beforeTime) return;
+            if (this.isVideoPlaying()) return;
+            if (video) {
+                // Surely we are just in the process of loading the video, so don't do anything
+                return;
+            }
+
+            if (nextVideo) {
+                // We found a gap, so skip it
+                let obj = decodeVideoKey(nextVideo);
+                console.warn(`Skipping gap from ${formatDateTime(this.state.targetTime)} to ${formatDateTime(obj.startTime)}`);
+                this.syncUnderlyingVideoElement({ seekToTime: obj.startTime });
+            } else {
+                // We hit the end, so wait
+                console.warn(`End of video at ${formatDateTime(this.state.targetTime)}, waiting 5 seconds and trying again.`);
+                setTimeout(() => {
+                    this.syncUnderlyingVideoElement({});
+                }, 5000);
+            }
+        })());
     }
 
-    private retrySeekToNext = throttleFunction(5000, async () => {
-        if (this.isVideoPlaying()) return;
-        await this.seekToNext();
-    });
+    private getCurrentVideo() {
+        let videos = this.getLoadedVideos();
+        return videos.find(x => x.time <= this.state.targetTime && this.state.targetTime < x.time + x.duration);
+    }
 
-    private async seekToNext() {
-        let nexts = await this.bufferVideoByTime(1);
-        let next = nexts[0];
-        if (!next) {
-            await this.retrySeekToNext();
+    private bufferVideo = throttleFunction(0, async (): Promise<void> => {
+        const getCurrentBufferDuration = () => (
+            this.state.videoWantsToPlay && !this.isVideoPlaying() && 0.1
+            || !this.isVideoPlaying() && this.config.pausedBufferTime
+            || this.config.playingBufferTime
+        );
+        let targetTime = this.state.targetTime;
+        let seekSeqNum = this.seekSeqNum;
+
+        let sourceBuffer = await this.getSourceBuffer(targetTime);
+
+        let timeToBuffer = getCurrentBufferDuration();
+
+        let video = await this.config.findVideo(targetTime) || await this.config.findNextVideo(targetTime);
+        if (!video) {
+            console.warn(`No video found at ${formatDateTime(targetTime)}, waiting 5 seconds and trying again.`);
+            // Minimum wait, to prevent infinite loop in bufferVideo
+            await delay(100);
+            setTimeout(this.bufferVideo, 5000);
             return;
         }
-        let time = this.config.getVideoStartTime(next.file);
-        console.log(`Seeking to ${time} from ${this.getCurrentPlayTime()}`);
-        await this.seekToTime(time);
-    }
-    private async onTimeUpdate() {
-        let bufferTime = this.state.wantsToPlay ? this.config.playingBufferTime : this.config.pausedBufferTime;
-        await this.bufferVideoByTime(bufferTime);
+        const view = this.sourceBufferView;
+        if (!view) throw new Error("No source buffer view in bufferVideo. bufferVideo should only be called from setTargetTime, so this should be IMPOSSIBLE.");
+        let curTime = targetTime;
 
-        let newBufferedTime = 0;
-        for (let video of this.videoInfos.values()) {
-            if (video instanceof Promise) continue;
-            if (video.time <= this.state.curPlayingTime) continue;
-            // NOTE: If the users seeks around a lot this will get artificially high, because we count way future
-            //  times that aren't going to play next. BUT, this is easier, and still useful. AND it handles gaps,
-            //  which otherwise, is a lot harder to handle (we have to track when videos are connected via
-            //  getNext, and even then, we might be wrong, due to seeking, etc, etc).
-            newBufferedTime += video.duration;
+        while (view === this.sourceBufferView) {
+            let info = decodeVideoKey(video);
+            if (info.startTime > curTime) {
+                curTime = info.startTime;
+            }
+
+            let videoObj = await this.loadVideo({ file: video, view, sourceBuffer, seekSeqNum });
+            let addedDuration = Math.min(videoObj.duration, info.endTime - curTime);
+            timeToBuffer -= addedDuration;
+            if (timeToBuffer < 0) break;
+
+            // Eh... getting the next from middle time isn't great, but... this should work
+            let middleTime = (info.startTime + info.endTime) / 2;
+            let nextVideo = await this.config.findNextVideo(middleTime);
+            if (!nextVideo) {
+                console.warn(`Reached end of videos at ${formatDateTime(curTime)}, waiting 5 seconds and trying again.`);
+                await delay(100);
+                setTimeout(this.bufferVideo, 5000);
+                return;
+            }
+            video = nextVideo;
         }
-        this.state.curBufferedTime = newBufferedTime;
-    }
-    private updatePlayTimeThrottled = throttleFunction(1000, () => {
-        this.state.curPlayingTimeThrottled = this.state.curPlayingTime;
     });
+    private async loadVideo(config: {
+        file: string;
+        view: { viewStartTime: number; viewEndTime: number; };
+        sourceBuffer: SourceBuffer;
+        seekSeqNum: number;
+    }) {
+        let videoObj = this.loadedVideos.get(config.file);
+        if (videoObj) return videoObj;
+        let { file, view, sourceBuffer } = config;
+
+        let info = decodeVideoKey(file);
+
+        videoObj = {
+            file: file,
+            time: info.startTime,
+            frames: 0,
+            keyFrames: 0,
+            duration: 0,
+            size: 0,
+        };
+        try {
+            let startLoadTime = Date.now();
+            let buffer = await this.config.getVideoBuffer(file);
+            if (!buffer) throw new Error("Video buffer is missing");
+
+            let curStart = info.startTime;
+            let curEnd = info.endTime;
+            // Try to avoid gaps where possible
+            let nextVideo = await this.config.findNextVideo(curStart);
+            if (nextVideo) {
+                let nextObj = parseVideoKey(nextVideo);
+                // If it's close enough, increase our duration to end when it ends
+                let dur = curEnd - curStart;
+                // Gaps are really bad, so it's better to just slow down the frame rate (which
+                //  increasing the duration does implicitly) than to have a gap.
+                let maxGapEnd = curEnd + dur * 2;
+                if (nextObj.startTime < maxGapEnd) {
+                    curEnd = nextObj.startTime;
+                }
+            }
+
+            let duration = curEnd - curStart;
+            let frameDuration = duration / info.frames;
+            let speed = getSpeed();
+            if (speed !== 1) {
+                frameDuration /= speed;
+            }
+            let internalTime = (curStart - view.viewStartTime) / getSpeed() / 1000;
+            let { buffer: mp4Buffer, frameCount, keyFrameCount } = await H264toMP4({
+                buffer: splitNALs(buffer),
+                frameDurationInSeconds: frameDuration / 1000,
+                mediaStartTimeSeconds: internalTime,
+            });
+
+            videoObj.frames = frameCount;
+            videoObj.keyFrames = keyFrameCount;
+            videoObj.duration = duration;
+            videoObj.size = buffer.byteLength;
+
+            this.state.loadedFrames += frameCount;
+            this.state.loadedBytes += buffer.byteLength;
+            this.state.loadedFiles++;
+            await sourceBuffer.appendBuffer(mp4Buffer);
+            await new Promise(r => sourceBuffer.addEventListener("updateend", r, { once: true }));
+
+            this.syncUnderlyingVideoElement({
+                loadSeqNum: config.seekSeqNum
+            });
+
+            if (info && info.frames !== frameCount) {
+                console.warn(`Expected ${info.frames} frames, but got ${frameCount} frames`);
+            }
+
+            let loadTime = Date.now() - startLoadTime;
+            console.log(`Loaded video (${formatNumber(buffer.length)}) in ${formatTime(loadTime)} | ${formatDateTime(info.startTime)} to ${formatDateTime(info.endTime)} (internal time ${formatHourMinuteSecond(internalTime * 1000)})`);
+
+        } catch (e: any) {
+            void recheckFileNow(file);
+            videoObj.error = e.stack;
+            console.error("Error loading video", file, e);
+        }
+
+        if (view === this.sourceBufferView) {
+            this.loadedVideos.set(file, videoObj);
+        }
+        return videoObj;
+    }
+
+
     // Gets a usable source buffer for this time. This means a source buffer where this time
     //  1) Won't be negative, and 2) Won't be beyond MAX_PLAYABLE_TIME. If the current
     //  source buffer can't do this, we create a new source buffer.
     private getSourceBuffer = runInSerial(async (time: number): Promise<SourceBuffer> => {
-        if (this.sourceBuffer && time > this.baseTime && time < this.baseTime + MAX_PLAYABLE_TIME) {
+        let view = this.sourceBufferView;
+        if (this.sourceBuffer && view && view.viewStartTime <= time && time < view.viewEndTime) {
             return this.sourceBuffer;
         }
         if (this.sourceBuffer) {
-            console.log(`Reseting source buffer, as time ${time} is outside of ${this.baseTime} to ${this.baseTime + MAX_PLAYABLE_TIME}`);
-            console.log(`Clearing ${this.videoInfos.size} videos that were loaded in old source buffer`);
+            if (view) {
+                console.log(`Reseting source buffer, as time ${formatDateTime(time)} is outside of ${formatDateTime(view.viewStartTime)} to ${formatDateTime(view.viewEndTime)}`);
+            }
+            console.log(`Clearing ${this.loadedVideos.size} videos that were loaded in old source buffer`);
         }
 
         let video = this.config.element;
         var push = new MediaSource();
         video.src = URL.createObjectURL(push);
-        this.videoInfos.clear();
-        this.baseTime = time - Math.floor(MAX_PLAYABLE_TIME / 2);
+        this.loadedVideos.clear();
         this.state.loadedFrames = 0;
         this.state.loadedBytes = 0;
         this.state.loadedFiles = 0;
 
-        this.sourceBuffer = await new Promise<SourceBuffer>(r => {
+        let newSourceBuffer = await new Promise<SourceBuffer>(r => {
             push.addEventListener("sourceopen", () => {
                 // NOTE: The string is from the avc1 box. Always avc1, and then the numbers I BELIEVE
                 //  are AVCProfileIndication, profile_compatibility, and AVCLevelIndication. We store them in the
@@ -235,159 +391,159 @@ export class VideoManager {
                 r(push.addSourceBuffer("video/mp4; codecs=\"avc1.64001E\""));
             });
         });
-
-        return this.sourceBuffer;
+        view = this.sourceBufferView;
+        if (view && view.viewStartTime <= time && time < view.viewEndTime) {
+            this.sourceBuffer = newSourceBuffer;
+            return newSourceBuffer;
+        } else {
+            throw new Error(`Cancelling source buffer load. Source buffer time is out of date, caller shouldn't load any data. Tried to load for ${formatDateTime(time)}`);
+        }
     });
 
-    private async loadVideo(file: string): Promise<VideoInfo> {
-        // Get the source buffer immediately, as accessing it can clear videoInfos!
-        let startTime = this.config.getVideoStartTime(file);
-        let sourceBuffer = await this.getSourceBuffer(startTime);
-        let cached = this.videoInfos.get(file);
-        if (!cached) {
-            console.log("Loading video", file);
-            let promise = (async (): Promise<VideoInfo> => {
-                let startLoadTime = Date.now();
-                let buffer = await this.config.getVideoBuffer(file);
-                if (!buffer) {
-                    void recheckFileNow(file);
-                    console.error("Video file is missing, skipping", file);
-                    return {
-                        file,
-                        time: startTime,
-                        frames: 0,
-                        keyFrames: 0,
-                        duration: 0,
-                        size: 0,
-                    };
-                }
-
-                try {
-                    let info = decodeVideoKey(file);
-                    let frameDurationInSeconds = info.duration / info.frames / 1000;
-                    let speed = getSpeed();
-                    if (speed !== 1) {
-                        frameDurationInSeconds = 1 / 60;
-                    }
-                    let { buffer: mp4Buffer, frameCount, keyFrameCount } = await H264toMP4({
-                        buffer: splitNALs(buffer),
-                        frameDurationInSeconds: frameDurationInSeconds,
-                        mediaStartTimeSeconds: (startTime - this.baseTime) / 1000,
-                    });
 
 
-                    this.state.loadedFrames += frameCount;
-                    this.state.loadedBytes += buffer.byteLength;
-                    this.state.loadedFiles++;
-                    sourceBuffer.appendBuffer(mp4Buffer);
+    private addHotkeys() {
+        let videoElement = this.config.element;
+        const frameDelta = (delta: number) => {
+            if (!videoElement) return;
 
-                    if (info && info.frames !== frameCount) {
-                        console.warn(`Expected ${info.frames} frames, but got ${frameCount} frames`);
-                    }
+            let curTime = this.state.targetTime;
+            // Find overlapping video
+            let matching = this.getCurrentVideo();
 
-                    let p = new PromiseObj();
-                    sourceBuffer.addEventListener("updateend", p.resolve as any);
-                    await p.promise;
-                    sourceBuffer.removeEventListener("updateend", p.resolve as any);
-                    let duration = info ? info.endTime - info.startTime : 0;
+            let timeOffset = delta * (1 / 30);
 
-                    let loadTime = Date.now() - startLoadTime;
-                    console.log("Loaded video in", formatTime(loadTime), `${formatNumber(buffer.length / loadTime * 1000)}B/s`, file, startTime, "duration", duration, "frames", frameCount, "keyframes", keyFrameCount);
-
-                    return {
-                        file,
-                        time: startTime,
-                        frames: frameCount,
-                        keyFrames: keyFrameCount,
-                        duration: duration,
-                        size: buffer.byteLength,
-                    };
-                } catch (e) {
-                    console.error("Error loading video, assuming it is 0 length", file, e);
-                    // Delete it after a bit, so we can retry
-                    setTimeout(() => {
-                        this.videoInfos.delete(file);
-                    }, 5000);
-
-                    return {
-                        file,
-                        time: startTime,
-                        frames: 0,
-                        keyFrames: 0,
-                        duration: 0,
-                        size: 0,
-                    };
-                }
-            })();
-            this.state.segmentsLoading++;
-            void promise.finally(() => this.state.segmentsLoading--);
-            void promise.then(x => {
-                if (this.videoInfos.get(file) === promise) {
-                    this.videoInfos.set(file, x);
-                }
+            if (matching) {
+                let frameTime = matching.duration / matching.frames;
+                let curFrameOffset = (curTime - matching.time) / frameTime;
+                let fraction = curFrameOffset % 1;
+                delta += 0.5 - fraction;
+                timeOffset = delta * frameTime;
+            }
+            this.syncUnderlyingVideoElement({
+                seekToTime: this.state.targetTime + timeOffset
             });
-            cached = promise;
-            this.videoInfos.set(file, cached);
-        }
-        return cached;
+        };
+
+        const seekVideo = (seconds: number) => {
+            if (!videoElement) return;
+            this.syncUnderlyingVideoElement({
+                seekToTime: this.state.targetTime + seconds * 1000
+            });
+        };
+
+        const hotkeyHandlers: Record<string, () => void> = {
+            "ArrowUp": () => {
+                if (!videoElement) return;
+                videoElement.volume = Math.min(1, videoElement.volume + 0.1);
+            },
+            "ArrowDown": () => {
+                if (!videoElement) return;
+                videoElement.volume = Math.max(0, videoElement.volume - 0.1);
+            },
+            "m": () => {
+                if (!videoElement) return;
+                videoElement.muted = !videoElement.muted;
+            },
+            "ArrowLeft": () => seekVideo(-5),
+            "ArrowRight": () => seekVideo(5),
+            "j": () => seekVideo(-5),
+            "l": () => seekVideo(5),
+            ",": () => frameDelta(-1),
+            ".": () => frameDelta(1),
+            "Ctrl+ArrowLeft": () => frameDelta(-1),
+            "Ctrl+ArrowRight": () => frameDelta(1),
+            " ": () => {
+                this.togglePlay();
+            },
+            "Enter": () => {
+                this.togglePlay();
+            },
+            "k": () => {
+                this.togglePlay();
+            },
+            "f": () => {
+                void videoElement.requestFullscreen();
+            },
+            "Ctrl+r": () => {
+                location.reload();
+            }
+        };
+
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
+            // Ignore if it is for an input, text area, etc
+            const ignore = (
+                e.target instanceof HTMLInputElement ||
+                e.target instanceof HTMLTextAreaElement ||
+                e.target instanceof HTMLSelectElement
+            );
+            if (ignore) return;
+
+            let key = e.key;
+            if (e.ctrlKey) key = "Ctrl+" + key;
+            if (e.shiftKey) key = "Shift+" + key;
+
+            const handler = hotkeyHandlers[key];
+            if (handler) {
+                e.preventDefault();
+                e.stopPropagation();
+                handler();
+            }
+        };
+
+        // There's no reason to focus the video element, except to use hotkeys, but... we support
+        //  that anyways. Otherwise, focusing the element just breaks things.
+        videoElement.addEventListener("focus", () => {
+            videoElement.blur();
+        });
+        videoElement.addEventListener("click", () => {
+            this.togglePlay();
+        });
+
+        // Add the event listener
+        document.addEventListener("keydown", onKeyDown);
+
+        // Return cleanup function
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+        };
     }
 
-    private seekSeqNum = 0;
-    /** NOTE: Automatically plays the next video after this one finishes, using findNextVideo
-     *      to find the next one (there's really no reason to use VideoManager if you don't
-     *      want to keep playing videos).
-     */
-    public async seekToTime(time: number): Promise<void> {
-        let videoElem = this.config.element;
-        this.seekSeqNum++;
-        let curSeqNum = this.seekSeqNum;
-        // Seek right away, for responsiveness
-        videoElem.currentTime = (time - this.baseTime) / 1000;
-        this.inAutoPlayback = false;
-        this.state.curPlayingTime = this.state.curPlayingTimeThrottled = this.getCurrentPlayTime();
 
-        // Load the video now, so playVideo can wait until we load to play
-        let video = await this.config.findVideo(time);
-        await this.loadVideo(video);
 
-        if (curSeqNum === this.seekSeqNum) {
-            videoElem.currentTime = (time - this.baseTime) / 1000;
-            this.inAutoPlayback = false;
-            // On user action update immediately, so it feels more responsive
-            this.state.curPlayingTime = this.state.curPlayingTimeThrottled = this.getCurrentPlayTime();
-        }
+    public seekToTime(time: number) {
+        this.syncUnderlyingVideoElement({ seekToTime: time });
     }
 
-    public async playVideoTime(time: number) {
-        console.log("Playing video time", time);
-        await this.config.element.pause();
-        await this.seekToTime(time);
-        this.inAutoPlayback = false;
-        await this.config.element.play();
-    }
 
     public getLoadedVideos() {
-        // Accept state, so we rerun when videos change
+        // Access state, so we rerun when videos change
         this.state.loadedBytes;
-        let videos: VideoInfo[] = [];
-        for (let [file, info] of this.videoInfos) {
-            if (info instanceof Promise) continue;
-            videos.push(info);
-        }
+        let videos = Array.from(this.loadedVideos.values());
+        sort(videos, x => x.time);
         return videos;
     }
 
     public getPlayState() {
-        if (this.state.isPlaying) return "Playing" as const;
-        if (this.state.wantsToPlay) return "Buffering" as const;
+        if (this.state.isVideoActuallyPlaying) return "Playing" as const;
+        if (this.state.videoWantsToPlay) return "Buffering" as const;
         return "Paused" as const;
     }
 
-    public async togglePlay() {
-        if (this.state.wantsToPlay) {
-            await this.playVideoTime(this.getCurrentPlayTime());
+    public togglePlay() {
+        if (this.state.videoWantsToPlay) {
+            this.pause();
         } else {
-            await this.seekToTime(this.getCurrentPlayTime());
+            this.play();
         }
+    }
+    public play() {
+        this.state.videoWantsToPlay = true;
+        void this.config.element.play();
+    }
+    public pause() {
+        this.state.videoWantsToPlay = false;
+        void this.config.element.pause();
     }
 }

@@ -2,8 +2,7 @@ import { binarySearchBasic, binarySearchIndex, sort, throttleFunction } from "so
 import { FileStorageSynced } from "./storage/DiskCollection";
 import { observable } from "./misc/mobxTyped";
 import { getVideoIndexPromise, getVideoIndexSynced, pollVideoFilesNow } from "./videoLookup";
-
-const MAX_ASSUMED_FILE_TIME = 1000 * 60 * 60 * 15;
+import { getThumbnailURL } from "./thumbnail";
 
 export type VideoFileObjIn = Omit<VideoFileObj, "duration" | "file">;
 
@@ -37,6 +36,8 @@ export type VideoFileObj = {
     endTime: number;
     duration: number;
     frames: number;
+
+    size: number;
 };
 
 export function joinNALs(nals: Buffer[]) {
@@ -82,7 +83,8 @@ export function encodeVideoKey(obj: VideoFileObjIn): string {
     let startTime = obj.startTime;
     let endTime = obj.endTime;
     let frames = obj.frames;
-    let copy: VideoFileObjIn = { segmentTime, priority, startTime, endTime, frames };
+    let size = obj.size;
+    let copy: VideoFileObjIn = { segmentTime, priority, startTime, endTime, frames, size };
     return "segment " + encodeFileObj(copy) + ".nal";
 }
 export function encodeVideoKeyPrefix(config: { segmentTime: number; priority: number }): string {
@@ -112,6 +114,7 @@ export function parseVideoKey(key: string): VideoFileObj {
     fileObj.duration = fileObj.endTime - fileObj.startTime;
     fileObj.frames = +fileObj.frames;
     fileObj.priority = +fileObj.priority;
+    fileObj.size = +fileObj.size;
     return fileObj;
 }
 export function getVideoStartTime(key: string): number {
@@ -132,6 +135,37 @@ export function findVideoSync(time: number): string {
     if (file) return file;
     return getVideoIndexSynced().flatVideos.at(-1)?.file || "";
 }
+export function getThumbnailRange(maxDim: number, range: { start: number; end: number; }): string {
+    let index = getVideoIndexSynced();
+    let videos = filterToRange(index.flatVideos, range);
+    let thumb = "";
+    for (let video of videos.slice(0, 20)) {
+        if (video.startTime < range.start) continue;
+        thumb = getThumbnailURL({ file: video.file, maxDimension: maxDim, fast: true, retryErrors: true });
+        if (thumb === "loading") break;
+        if (thumb.startsWith("data:")) break;
+    }
+    return thumb;
+}
+
+export function filterToRange<T extends { startTime: number; endTime: number }>(values: T[], range: { start: number; end: number }): T[] {
+    let rangeIndexStart = binarySearchBasic(values, x => x.startTime, range.start);
+    if (rangeIndexStart < 0) rangeIndexStart = ~rangeIndexStart - 1;
+    rangeIndexStart = Math.max(0, rangeIndexStart);
+    // Continue until we find a range that includes the start
+    while (rangeIndexStart < values.length) {
+        if (values[rangeIndexStart].endTime > range.start) break;
+        rangeIndexStart++;
+    }
+    // The end is starts after the range end
+    let rangeIndexEnd = rangeIndexStart;
+    while (rangeIndexEnd < values.length) {
+        if (values[rangeIndexEnd].startTime >= range.end) break;
+        rangeIndexEnd++;
+    }
+    return values.slice(rangeIndexStart, rangeIndexEnd);
+}
+
 function findVideoBase(time: number): string | undefined {
     let videos = getVideoIndexSynced().flatVideos;
     let index = binarySearchBasic(videos, x => x.startTime, time);

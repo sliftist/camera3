@@ -2,7 +2,7 @@ import { delay } from "socket-function/src/batching";
 import os, { endianness } from "os";
 import fs from "fs";
 import { sort, timeInMinute } from "socket-function/src/misc";
-import { formatNumber, formatTime } from "socket-function/src/formatting/format";
+import { formatDateTime, formatNumber, formatTime } from "socket-function/src/formatting/format";
 
 import { IdentifyNal, SplitAnnexBVideo } from "mp4-typescript";
 import { decodeVideoKey, encodeVideoKey, encodeVideoKeyPrefix, joinNALs } from "./videoHelpers";
@@ -13,7 +13,7 @@ export const videoFolder = "/media/video/output/";
 // NOTE: Only used for speed > 1 (otherwise we use 1 key frame per segment)
 const TARGET_FRAMES_PER_SEGMENT = 30;
 const BASE_ASSUMED_FRAME_TIME = 1000 / 30;
-const PLAYBACK_TIME_PER_FOLDER = 10 * 1000;
+const PLAYBACK_TIME_PER_FOLDER = 100 * 1000;
 
 type FrameVideoInput = {
     name: string;
@@ -28,9 +28,11 @@ export async function getReadyVideos(): Promise<FrameVideoInput[]> {
     let filesWithTimestamps: FrameVideoInput[] = [];
     for (let file of toBeMoved) {
         let stat = await fs.promises.stat(videoFolder + file);
+        console.log(`File ${file} has created time ${formatDateTime(stat.ctimeMs)} and modified time ${formatDateTime(stat.mtimeMs)}`);
         filesWithTimestamps.push({
             name: file,
-            created: stat.birthtimeMs,
+            // ntfs-3g is broken, and doesn't give birth time. But atime apparently is the same as it?
+            created: stat.atimeMs,
             modified: stat.mtimeMs,
             nextCreated: 0,
         });
@@ -75,12 +77,15 @@ export async function emitFrames(config: {
             curEndTime = curStartTime + curDuration;
         }
 
+        let nalGroupSize = nalGroup.reduce((acc, x) => acc + x.length, 0);
+
         let fullPath = outputFolder + getTimeFolder({ time: curStartTime, speedMultiplier }) + encodeVideoKey({
             segmentTime: segmentTime,
             startTime: curStartTime,
             endTime: curEndTime,
             frames: frameCount,
             priority: 0,
+            size: nalGroupSize,
         });
         let newPath = fullPath;
         // We only skip data at faster speeds
@@ -113,6 +118,7 @@ export async function emitFrames(config: {
                     startTime: decoded.startTime,
                     endTime: curEndTime,
                     frames: decoded.frames + frameCount,
+                    size: decoded.size + nalGroupSize,
                     priority: 0,
                 });
             }
@@ -228,7 +234,11 @@ export function getTimeFolder(config: {
     let time = config.time;
     let perFolder = PLAYBACK_TIME_PER_FOLDER * config.speedMultiplier;
     let rounded = (Math.ceil(time / perFolder) + 1) * perFolder;
-    return Array.from(rounded.toString()).join("/") + "/";
+    let folder = Array.from(rounded.toString()).join("/") + "/";
+    while (folder.endsWith("/0/")) {
+        folder = folder.slice(0, -"0/".length);
+    }
+    return folder;
 }
 
 // Finds the first file with this prefix (duplicates are broken by a string sort).

@@ -42,9 +42,9 @@ function watchDir(dir: string, callback: () => void) {
     });
 }
 
-function shouldIgnoreFile(filename: string): boolean {
-    const ignoredPaths = ["extension", ".git", "node_modules", "build"];
-    return ignoredPaths.some(path => filename.includes(path));
+function shouldIgnoreFile(fullPath: string): boolean {
+    const ignoredPaths = ["extension", ".git", "node_modules", "build", ".eslintrc.js"];
+    return ignoredPaths.some(path => fullPath.includes(path));
 }
 
 function notifyClients(server: ws.Server, message: string) {

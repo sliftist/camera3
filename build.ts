@@ -5,6 +5,9 @@ import fs from "fs";
 async function* walk(dir: string): AsyncGenerator<string> {
     for await (const d of await fs.promises.opendir(dir)) {
         const entry = `${dir}/${d.name}`;
+        if (entry.includes("/node_modules/")) continue;
+        if (entry.includes("/.git/")) continue;
+        if (entry.includes("/build/")) continue;
         if (d.isDirectory()) {
             yield* walk(entry);
         } else if (d.isFile()) {
@@ -58,14 +61,12 @@ async function build() {
 
     // Recursive read files, and copy all .png and .html files
     for await (let path of walk(curDir)) {
-        if (path.includes("/node_modules/")) continue;
-        if (path.includes("/.git/")) continue;
-        if (path.includes("/build/")) continue;
         if (path.endsWith(".png") || path.endsWith(".html")) {
             pathsToCopy.push(path);
         }
     }
 
+    let unchanged = 0;
 
     for (let path of pathsToCopy) {
         path = path.replace(curDir, "");
@@ -96,7 +97,23 @@ async function build() {
             await fs.promises.mkdir(dir, { recursive: true });
         }
         if (fixImports) {
-            let contents = await fs.promises.readFile(curDir + path, "utf8");
+            let source = curDir + path;
+            async function getMTime(path: string): Promise<number> {
+                try {
+                    return (await fs.promises.stat(path)).mtimeMs;
+                } catch {
+                    return 0;
+                }
+            }
+            let sourceMTime = await getMTime(source);
+            let newMTime = await getMTime(newPath);
+            // Probably unchanged, so just leave it
+            if (newMTime > sourceMTime) {
+                unchanged++;
+                continue;
+            }
+
+            let contents = await fs.promises.readFile(source, "utf8");
             contents = contents.replaceAll(`Object.defineProperty(exports, "__esModule", { value: true , configurable: true});`, "");
             contents = convertExportsToExport(contents);
             contents = convertImports(contents, newPath);
@@ -107,7 +124,7 @@ async function build() {
     }
 
     let end = Date.now();
-    console.log(`Copied ${pathsToCopy.length} in ${end - time}ms at ${new Date().toLocaleTimeString()}`);
+    console.log(`Copied ${pathsToCopy.length - unchanged} in ${end - time}ms at ${new Date().toLocaleTimeString()}`);
 }
 
 

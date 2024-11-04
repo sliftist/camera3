@@ -1,19 +1,21 @@
-import { cache } from "socket-function/src/caching";
+import { cache, lazy } from "socket-function/src/caching";
 import { DiskCollectionPromise, DiskCollectionRaw, DiskCollection } from "./storage/DiskCollection";
 import { getFileStorage } from "./storage/FileFolderAPI";
-import { decodeVideoKey, findVideo, findVideoSync, parseVideoKey, splitNALs } from "./videoHelpers";
+import { decodeVideoKey, findVideo, findVideoSync, parseVideoKey } from "./videoHelpers";
 import { H264toMP4, IdentifyNal, SplitAnnexBVideo } from "mp4-typescript";
 import { observable } from "./misc/mobxTyped";
 import { getVideoIndexSynced, recheckFileNow } from "./videoLookup";
 import { binarySearchBasic } from "socket-function/src/misc";
-
-
+import { splitNALs } from "./videoBase";
+import { isNode } from "typesafecss";
+import { jpegSuffixes } from "./constants";
 
 const sha256 = require("./sha256") as {
     sha256: {
         (input: string): string;
     }
 };
+
 
 let thumbnailCache = new DiskCollectionPromise<1>("thumbnailCache6");
 let thumbnails = new DiskCollectionRaw("thumbnails6");
@@ -75,12 +77,22 @@ function getKey(config: KeyConfig) {
     if (config.cropToAspectRatio) {
         values.cropToAspectRatio = config.cropToAspectRatio;
     }
+
     return sha256.sha256(JSON.stringify(values)).slice(0, 20);
 }
 
 let thumbObservables = new Map<string, {
     value: string;
 }>();
+
+export type ThumbMetadata = {
+    changes: number;
+};
+let thumbMetadatas = new Map<string, ThumbMetadata>();
+
+export function getThumbMetadata(imageURL: string) {
+    return thumbMetadatas.get(imageURL);
+}
 
 export function getThumbnailURL(config: {
     file: string;
@@ -117,6 +129,52 @@ export async function getThumbnailPromise(config: KeyConfig): Promise<string> {
     let { file } = config;
     let storage = await getFileStorage();
     let key = getKey(config);
+
+    let inMemoryCached = thumbObservables.get(key)?.value;
+    if (inMemoryCached && inMemoryCached.startsWith("data:")) {
+        return inMemoryCached;
+    }
+
+    console.log(`Getting thumbnail for ${file}@${config.offset}`);
+
+    const verifyBaseFileExists = lazy(async () => {
+        let handle = await storage.folder.getNestedFileHandle(config.file.split("/"));
+        if (!handle) {
+            void recheckFileNow(file);
+        }
+    });
+
+    for (let suffix of jpegSuffixes) {
+        // Skip if it is too small, unless it is the largest size
+        if (suffix.width < config.maxDimension && suffix !== jpegSuffixes.at(-1)) continue;
+        let jpegPath = config.file + suffix.suffix;
+        let buffer = await storage.folder.readNestedPath(jpegPath.split("/"));
+        if (!buffer) {
+            await verifyBaseFileExists();
+            continue;
+        }
+        let data = buffer.toString("base64");
+
+        let metadataObj: ThumbMetadata | undefined;
+        let metadata = await storage.folder.readNestedPath((jpegPath + ".metadata").split("/"));
+        if (metadata) {
+            try {
+                metadataObj = JSON.parse(metadata.toString());
+            } catch { }
+        }
+
+        let url = `data:image/jpeg;base64,${data}`;
+        if (metadataObj) {
+            thumbMetadatas.set(url, metadataObj);
+        }
+        return url;
+    }
+    return "file not found";
+}
+
+// Old code to actually generate the thumbnail. Now we just generate thumbnails for video
+//      with activity ahead of time, on disk.
+/*
 
     if (await thumbnailCache.get(key)) {
         let value = await thumbnails.get(key);
@@ -272,4 +330,4 @@ export async function getThumbnailPromise(config: KeyConfig): Promise<string> {
         }
         freeThread(thread);
     }
-}
+*/

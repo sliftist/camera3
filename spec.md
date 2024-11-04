@@ -4,41 +4,55 @@ UNFIXABLE BUGS
         - And sometimes it just dies
     - Sometimes /dev/video0 goes away. We can switch, but I think that video crashes as well, etc, etc, until there is nothing let by /dev/video10, which I think is an encoded, which then hangs forever.
 
-
-todonext
-Check io errors after running for a while
-    dmesg --ctime | grep -i "sda"
-    Last was at "Fri Nov  1 19:10:59 2024", so... we shouldn't get anymore after that!
+Sometimes the usb drive crashes!
+    - Maybe... add a watchdog, and if it's gone for more than 5 minutes, "sudo reboot" ?
+    - Could have been out of CMA memory. So we increased it to 64MB.
 
 
-Serverside python activity script (static video deletion)
-    - activity.ts, command4.txt
-    - Find activity, and delete video with no activity (keeping a padding of minimum number of frames of non-activity around the activity)
-    - FIRST, just log the activity ranges, and manually verify them
-    - Take static times in 60x and use it to delete static 1x video
-
-Python script to re-encode sped up video
-    - New file names, via a new priority value
-    - If we detect data with this type, we will ignore anything it overlaps (at all) with, that has a lower priority
-        - We can also use this to detect files we have yet to re-encode
-
-Pre-thumbnail generation
-    - Could probably do this when finding activity
-        - Because activity tracking looks at EVERY frame of the sped up code, this might not map to EVERY 1x segment, but... it should map to most of them. And every sped up segment will get a frame (many, but we just want the first)
-    - Storing beside each video, for each segment
-        - AND, only on video with activity
-        - Create thumbnail2, which still locally caches, but then gets it off the adjacent jpeg (and maybe falls back to "thumbnail.ts" if there is no adjacent jpeg)
-    - Make sure to gc these in fix.ts, when we limit size
-        - AND in activity deletion
 
 
-Browser video/file caching
-    - We should be able to store 1GB easily
-        - Maybe... 1GB per speed (this will mean higher speeds will be able to cache ALL the video)
+Verify activity.ts is efficient, and uses the last used time to not re-check good activity
+
+
+
+
+Show fill overlay for time increment selectors, instead of number
+    - Show number in the title, on hover
+
+
+Make sure live video roughly works (it might be a minute or two delayed, but it should still play constantly, and never get stuck)
+
+
+MANY thumbnails show no activity, BUT, how is that possible? Shouldn't activity.py pick the best one?
+    - Check by looping that activity, to see if there is a better frame
+    - Check the disk, etc.
+
+
+Playback mapping time is broken
+    (The "extending to the next video" gap is probably too short, it should be only a few frames, instead of the entire length of the segment).
+    - http://localhost:4040/?t=1730572442000&p=&inc=day&gridSize=200&speed=3600x&rate=1
+    - The video is correctly written to disk as "2024/11/02 02:00:01 PM to 2024/11/02 02:59:37 PM"
+    - However, when we seek, we don't map the track times to the video correctly
+
+Video seems to have frames out of order???
+    - http://localhost:4040/?t=1730619684000&p=&inc=&gridSize=400&speed=600x&rate=1&timeRange=1730619684694.8142-1730620197046.5625
+
+
+
+
+VERSION 2
+
+Fix 60x video
+    - We are getting 15FPS on it, when it should be 30FPS. Not a major bug, but annoying, and might be a sign of an issue with how we append to video. Higher rates are 30FPS, so... not sure what's going on with it.
+    - ALSO, this means we only have 4s resolution, instead of 2s. WHICH, is very annoying
+        - Maybe we should just add 15x video, to give us 1s resolution.
+        - We SHOULD be able to use this with activity tracking, but... it cuts it close to us running out of processing power.
+
+Re-encode video after finding activity
+    - Will greatly reduce the size, allowing us to play the video at a much higher rate
 
 
 RTP streaming
-    - Get the video by polling the file as it is written VERY frequently. This should give us < 1 second latency (on getting the NALs at least)
     - WebRTC (S)RTP / DTLS
     - SRTP eats the DTLS connection, like websockets do, which makes things difficult
         - ALTHOUGH, maybe this means we don't have to implement MOST of DTLS, so we could implement it ourself?
@@ -49,10 +63,13 @@ RTP streaming
     - TRY to get it working with GSTREAMER.
         - Apparently whipclientsink might do what we want?
         - https://claude.ai/chat/7da8d224-01b6-4700-b793-de6729fe8bf9
-    - OH! And we apparently need to steal the entire connection with SRTP, and use a key passed in the extension.
     - We'll need a real cert as well, so... we'll need a letsencrypt loop, etc. Probably just a screen, which creates a new cert every week.
     - We can setup the DNS manually, the IP won't change often
-    
+
+Browser video/file caching?
+    - We should be able to store 1GB easily
+        - Maybe... 1GB per speed (this will mean higher speeds will be able to cache ALL the video)
+
 Display connected to main raspberry pi, which shows the live video?
 
 4K camera + split to emit 4K@1fps and 1080p@15fps?
@@ -64,6 +81,7 @@ Maybe nice to have
         - Read the actively writing file, up to a keyframe, and play that?
     Cloud storage
         - Mostly for sped up video, which we will have a LOT less of (especially at 100X speed? Although with only keyframes maybe we need 1000X speed)
+
 
 
 

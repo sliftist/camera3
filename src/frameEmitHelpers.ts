@@ -5,8 +5,9 @@ import { sort, timeInMinute } from "socket-function/src/misc";
 import { formatDateTime, formatNumber, formatTime } from "socket-function/src/formatting/format";
 
 import { IdentifyNal, SplitAnnexBVideo } from "mp4-typescript";
-import { decodeVideoKey, encodeVideoKey, encodeVideoKeyPrefix, joinNALs } from "./videoHelpers";
+import { decodeVideoKey, encodeVideoKey, encodeVideoKeyPrefix } from "./videoHelpers";
 import { getSpeed } from "./urlParams";
+import { joinNALs } from "./videoBase";
 
 export const videoFolder = "/media/video/output/";
 
@@ -157,6 +158,12 @@ export function getDirMaximumChangeTime(dirPath: string) {
         throw new Error(`Invalid time dir path: ${dirPath}`);
     }
     return time;
+}
+
+export function getFolderSpeed(folder: string) {
+    let parts = folder.split("/");
+    let speeds = parts.filter(x => x.endsWith("x")).map(x => +x.slice(0, -1)).filter(x => !isNaN(x));
+    return speeds[0] || 1;
 }
 
 function getDir(path: string) {

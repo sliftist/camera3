@@ -5,7 +5,7 @@ import { URLParamStr } from "./misc/URLParam";
 import { PendingDisplay, setPending } from "./storage/PendingManager";
 import { sort } from "socket-function/src/misc";
 import { VideoPlayer } from "./VideoPlayer";
-import { findVideo, getVideoStartTime, parseVideoKey } from "./videoHelpers";
+import { deleteActivityCache, findVideo, getVideoStartTime, parseVideoKey } from "./videoHelpers";
 import { resetStorageLocation } from "./storage/FileFolderAPI";
 import { deleteVideoCache, forceRecheckAllNow, getAvailableSpeeds, getLastScannedInfo, getVideoIndexSynced } from "./videoLookup";
 import { adjustRateURL, getSpeed, setSpeed } from "./urlParams";
@@ -73,6 +73,7 @@ export class Page extends preact.Component {
                                 try {
                                     await deleteVideoCache();
                                     await deleteThumbCache();
+                                    await deleteActivityCache();
                                     window.location.reload();
                                 } catch (e: any) {
                                     setPending("Reset Cache", "error " + e.message);
@@ -87,7 +88,7 @@ export class Page extends preact.Component {
                     <div className={css.hbox(20).justifyContent("end").flexShrink0}>
                         {scannedObj &&
                             <span>
-                                Full scanned in {formatTime(scannedObj.duration)} (at {formatDateTime(scannedObj.time)})
+                                Full scanned in {formatTime(scannedObj.duration)}, {formatTime(Date.now() - scannedObj.time)} ago (at {formatDateTime(scannedObj.time)})
                             </span>
                         }
                         <IndexInfo />
@@ -112,7 +113,7 @@ export class Page extends preact.Component {
                             await forceRecheckAllNow();
                             this.synced.reloading = false;
                         }}>
-                            {this.synced.reloading ? "Reloading Files..." : "Reload Files"}
+                            {this.synced.reloading ? "Checking disk..." : `Recheck ${formatNumber(getVideoIndexSynced().ranges.map(x => x.videos.length).reduce((a, b) => a + b, 0))} Files`}
                         </Button>
                         <div className={css.hbox(5)}>
                             <b>Time per Second</b>

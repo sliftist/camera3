@@ -1,8 +1,16 @@
 import { binarySearchBasic, binarySearchIndex, sort, throttleFunction } from "socket-function/src/misc";
-import { FileStorageSynced } from "./storage/DiskCollection";
+import { DiskCollection, FileStorageSynced } from "./storage/DiskCollection";
 import { observable } from "./misc/mobxTyped";
 import { getVideoIndexPromise, getVideoIndexSynced, pollVideoFilesNow } from "./videoLookup";
-import { getThumbnailURL } from "./thumbnail";
+import { getThumbMetadata, getThumbnailURL } from "./thumbnail";
+import { formatDate, formatDateTime } from "socket-function/src/formatting/format";
+import { lazy } from "socket-function/src/caching";
+
+const sha256 = require("./sha256") as {
+    sha256: {
+        (input: string): string;
+    }
+};
 
 export type VideoFileObjIn = Omit<VideoFileObj, "duration" | "file">;
 
@@ -20,15 +28,6 @@ export type VideoFileObj = {
     //      that video (so processing doesn't need to prevent duplicates by searching itself).
     segmentTime: number;
 
-    // Starts at 0, then is set to 1 after we parse video for activity,
-    //  and 2 when we re-encode sped up video (otherwise it is all keyframes)
-    //  - If video overlaps, we ignore the video with lower priority
-    //      (on ties we take higher duration).
-    //  - This both serves to prevent duplicate video, and to track how
-    //      processed the video is. The goal is for all video to undergo
-    //      all processing steps.
-    priority: number;
-
     // time is from the file creation time, which could be off if multifilesink lags.
     startTime: number;
     // endTime is a GUESS. It's based on the last modified time, which could be off
@@ -39,32 +38,6 @@ export type VideoFileObj = {
 
     size: number;
 };
-
-export function joinNALs(nals: Buffer[]) {
-    function bigEndianUint32(value: number) {
-        let buf = Buffer.alloc(4);
-        buf.writeUInt32BE(value);
-        return buf;
-    }
-    return Buffer.concat(nals.flatMap(nal => [bigEndianUint32(nal.length), nal]));
-}
-export function splitNALs(buffer: Buffer, ignorePartial?: "ignorePartial"): Buffer[] {
-    let outputBuffers: Buffer[] = [];
-    let i = 0;
-    while (i < buffer.length) {
-        let length = buffer.readUInt32BE(i);
-        i += 4;
-        if (i + length > buffer.length) {
-            if (ignorePartial) break;
-            let errorMessage = `NAL length is too long, buffer is corrupted. ${i} + ${length} = ${i + length} > ${buffer.length}`;
-            console.error(errorMessage);
-            break;
-        }
-        outputBuffers.push(buffer.slice(i, i + length));
-        i += length;
-    }
-    return outputBuffers;
-}
 
 function encodeFileObj(obj: Record<string, string | number>) {
     return Object.entries(obj).map(([key, value]) => `${key.replaceAll(/\s+/g, " ")}=${String(value).replaceAll(/\s+/g, " ")}`).join("   ");
@@ -79,24 +52,23 @@ function decodeFileObj(str: string) {
 }
 export function encodeVideoKey(obj: VideoFileObjIn): string {
     let segmentTime = obj.segmentTime;
-    let priority = obj.priority;
     let startTime = obj.startTime;
     let endTime = obj.endTime;
     let frames = obj.frames;
     let size = obj.size;
-    let copy: VideoFileObjIn = { segmentTime, priority, startTime, endTime, frames, size };
+    let copy: VideoFileObjIn = { segmentTime, startTime, endTime, frames, size };
     return "segment " + encodeFileObj(copy) + ".nal";
 }
-export function encodeVideoKeyPrefix(config: { segmentTime: number; priority: number }): string {
+export function encodeVideoKeyPrefix(config: { segmentTime: number; }): string {
     // Must pad, so sorting by string works.
     return "segment " + encodeFileObj({
         segmentTime: config.segmentTime,
-        priority: config.priority,
     });
 }
 
 export function isVideoFile(file: string) {
-    return file.startsWith("segment ") && file.endsWith(".nal");
+    let fileName = file.split("/").at(-1)!;
+    return fileName.startsWith("segment ") && fileName.endsWith(".nal");
 }
 
 export const decodeVideoKey = parseVideoKey;
@@ -113,7 +85,6 @@ export function parseVideoKey(key: string): VideoFileObj {
     fileObj.segmentTime = +fileObj.segmentTime;
     fileObj.duration = fileObj.endTime - fileObj.startTime;
     fileObj.frames = +fileObj.frames;
-    fileObj.priority = +fileObj.priority;
     fileObj.size = +fileObj.size;
     return fileObj;
 }
@@ -133,17 +104,65 @@ export async function findVideo(time: number): Promise<string | undefined> {
 export function findVideoSync(time: number): string | undefined {
     return findVideoBase(time);
 }
+
+let thumbnailActivityCache = new DiskCollection<number>("thumbnailActivityCache");
+export async function deleteActivityCache() {
+    await thumbnailActivityCache.reset();
+}
+const hackThumbnailLoadFlag = lazy(() => {
+    setTimeout(() => {
+        thumbnailActivityCache.set("initialized", 1);
+    }, 30000);
+});
+
 export function getThumbnailRange(maxDim: number, range: { start: number; end: number; }): string {
     let index = getVideoIndexSynced();
-    let videos = filterToRange(index.flatVideos, range);
-    let thumb = "";
-    for (let video of videos.slice(0, 20)) {
+    // Prefer the center of the video, as when we have activity, this is likely
+    //  where activity is happening.
+    let targetTime = (range.start + range.end) / 2;
+    let i = binarySearchBasic(index.flatVideos, x => x.startTime, targetTime);
+    if (i < 0) i = ~i - 1;
+
+    let beforeIndex = Math.max(0, i - 10);
+    let afterIndex = Math.min(index.flatVideos.length, i + 10);
+    let videos = index.flatVideos.slice(beforeIndex, afterIndex);
+    videos = videos.filter(x => x.startTime >= range.start && x.endTime <= range.end);
+    sort(videos, x => Math.abs(x.startTime - targetTime));
+
+    let anyLoading = false;
+
+    // Get the thumbnail with the most activity
+    let videoByActivity: { video: VideoFileObj; activity: number; }[] = [];
+    for (let video of videos) {
         if (video.startTime < range.start) continue;
-        thumb = getThumbnailURL({ file: video.file, maxDimension: maxDim, fast: true, retryErrors: true });
-        if (thumb === "loading") break;
-        if (thumb.startsWith("data:")) break;
+        let key = sha256.sha256(video.file);
+        let activity = thumbnailActivityCache.get(key);
+        if (activity) {
+            videoByActivity.push({ video, activity });
+            continue;
+        }
+        // Basically... on the first load, this delays 30s. BUT, after that, the key will be there,
+        //  and will show as at least 1 key in getKeys(), letting us know the data has been loaded.
+        hackThumbnailLoadFlag();
+        if (thumbnailActivityCache.getKeys().length === 0) continue;
+
+        let thumb = getThumbnailURL({ file: video.file, maxDimension: maxDim, fast: true, retryErrors: true });
+        if (thumb === "loading") {
+            anyLoading = true;
+        }
+        if (thumb.startsWith("data:")) {
+            let metadata = getThumbMetadata(thumb);
+            let activity = metadata?.changes || 1;
+            thumbnailActivityCache.set(key, activity);
+            videoByActivity.push({ video, activity });
+        }
     }
-    return thumb;
+    sort(videoByActivity, x => -x.activity);
+    let bestVideo = videoByActivity[0]?.video.file;
+    if (anyLoading) return "loading";
+    if (!bestVideo) return "";
+
+    return getThumbnailURL({ file: bestVideo, maxDimension: maxDim, fast: true, retryErrors: true });
 }
 
 export function filterToRange<T extends { startTime: number; endTime: number }>(values: T[], range: { start: number; end: number }): T[] {

@@ -4,11 +4,11 @@ import { VideoManager } from "./VideoManager";
 import { URLParamStr } from "./misc/URLParam";
 import { css } from "typesafecss";
 import { last, sort, timeInDay, timeInHour, timeInMinute, timeInSecond } from "socket-function/src/misc";
-import { formatDate, formatTime } from "socket-function/src/formatting/format";
+import { formatDate, formatDateTime, formatTime } from "socket-function/src/formatting/format";
 import { observable } from "./misc/mobxTyped";
 import { getVideoIndexSynced } from "./videoLookup";
-import { getSpeed } from "./urlParams";
-import { formatFullIncrement, formatSingleIncrement, getNextIncrement, getPrevIncrement, getStartOfIncrement, incrementMedianSize, incrementSubs, IncrementType, incrementUps, VideoGrid } from "./VideoGrid";
+import { getSelectedTimeRange, getSpeed, setSelectedTimeRange } from "./urlParams";
+import { formatFullIncrement, formatSingleIncrement, getNextIncrement, getPrevIncrement, getStartOfIncrement, incrementMedianSize, incrementSubs, IncrementType, incrementUps, VideoGrid2 } from "./VideoGrid2";
 import { speedGroups } from "./constants";
 import { getThumbnailURL } from "./thumbnail";
 import { findVideoSync, getThumbnailRange } from "./videoHelpers";
@@ -68,7 +68,7 @@ export class Trackbar extends preact.Component<{
             end: number;
         }[] = [];
         let time = getPrevIncrement(startTime, increment);
-        while (time < endTime) {
+        while (time < endTime && segments.length < 240) {
             let nextTime = getNextIncrement(time, increment);
             segments.push({
                 start: time,
@@ -78,21 +78,25 @@ export class Trackbar extends preact.Component<{
         }
 
         let videoSegments = getVideoIndexSynced().ranges;
+        videoSegments = videoSegments.filter(x => x.startTime < endTime && x.endTime > startTime);
 
         let playState = videoManager.getPlayState();
 
+        let playHue = (
+            playState === "Playing" && 120
+            || playState === "Paused" && 80
+            || 220
+        );
+
         return [
-            <VideoGrid videoManager={videoManager} defaultIncrement={nextIncrement} />,
+            <VideoGrid2 videoManager={videoManager} defaultIncrement={nextIncrement} />,
             <div
                 className={
                     css.fillWidth.flexShrink0
                         .relative
                     + css.hsl(
-                        playState === "Playing" && 120
-                        || playState === "Paused" && 30
-                        || 220
-                        ,
-                        50,
+                        playHue,
+                        10,
                         50
                     )
                 }
@@ -107,7 +111,7 @@ export class Trackbar extends preact.Component<{
                                 .width(`calc(max(1px, ${segment.duration / TRACKBAR_RANGE * 100}%))`)
                                 .fillHeight
                                 .opacity(0.8)
-                                .hsl(120, 0, 50)
+                                .hsl(playHue, 50, 50)
                             //+ (segment.buffered ? css.hsl(120, 50, 50) : css.hsl(120, 0, 50))
                         }
                     />
@@ -119,16 +123,21 @@ export class Trackbar extends preact.Component<{
                     {segments.map((segment) =>
                         (() => {
                             let url = getThumbnailRange(IMAGE_WIDTH, segment);
-                            if (!url.startsWith("data:")) return undefined;
-                            return <div className={
-                                css.absolute.left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
-                                    .width(`${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%`)
-                                //.borderLeft("5px solid hsla(0, 0%, 0%, 0.5)")
-                            }>
-                                <img src={url} className={
+                            if (!url.startsWith("data:")) {
+                                url = "";
+                            }
+                            return <div
+                                className={
+                                    css.absolute.left(`${(segment.start - startTime) / TRACKBAR_RANGE * 100}%`)
+                                        .width(`${(segment.end - segment.start) / TRACKBAR_RANGE * 100}%`)
+                                        .minHeight("100%")
+                                    //.borderLeft("5px solid hsla(0, 0%, 0%, 0.5)")
+                                }
+                            >
+                                {!!url && <img src={url} className={
                                     css.objectFit("contain")
                                         .fillBoth
-                                } />
+                                } />}
                                 <span className={
                                     css.absolute.pos(0, 0).fillBoth.center
                                         .fontSize(18).boldStyle
@@ -156,6 +165,9 @@ export class Trackbar extends preact.Component<{
                 {(() => {
                     let loadedVideos = videoManager.getLoadedVideos();
                     sort(loadedVideos, x => x.time);
+                    // Only videos in the current range
+                    loadedVideos = loadedVideos.filter(x => x.time + x.duration > startTime && x.time < endTime);
+
                     // NOTE: This will never become a performance problem, because by the time we have 10K videos,
                     //  we'll also have 10GB of video loaded, at which point the browser will have crashed 6K videos ago...
                     let ranges: { start: number; end: number; error?: string }[] = [];
@@ -183,7 +195,24 @@ export class Trackbar extends preact.Component<{
                                     .fillHeight
                                     .top(0)
                                     .opacity(0.5)
-                                    .hsl(segment.error ? -5 : 260, 50, 50)
+                                    .hsl(segment.error ? -5 : 260, 70, 50)
+                            }
+                        />
+                    );
+                })()}
+                {(() => {
+                    let selectedRange = getSelectedTimeRange();
+                    if (!selectedRange) return undefined;
+                    return (
+                        <div
+                            className={
+                                css.absolute
+                                    .left(`calc(${(selectedRange.start - startTime) / TRACKBAR_RANGE * 100}% - 2px)`)
+                                    .width(`calc(${(selectedRange.end - selectedRange.start) / TRACKBAR_RANGE * 100}% + 4px)`)
+                                    .fillHeight
+                                    .top(-2)
+                                    .height(4)
+                                    .hsl(210, 70, 50)
                             }
                         />
                     );
@@ -202,6 +231,7 @@ export class Trackbar extends preact.Component<{
                         let frac = x / rect.width;
                         console.log({ x, frac });
                         let time = startTime + frac * TRACKBAR_RANGE;
+                        setSelectedTimeRange(undefined);
                         videoManager.seekToTime(time);
                     }}
                 />
@@ -218,7 +248,8 @@ class FormatTime extends preact.Component<{
     render() {
         let centerTime = timeOverride.value || this.props.time;
         return <span>
-            {formatFullIncrement(centerTime, this.props.increment, "long")} ({formatTime(Date.now() - centerTime)} AGO)
+            {/* {formatFullIncrement(centerTime, this.props.increment, "long")} ({formatTime(Date.now() - centerTime)} AGO) */}
+            {formatDateTime(centerTime)} ({formatTime(Date.now() - centerTime)} AGO)
         </span>;
     }
 }

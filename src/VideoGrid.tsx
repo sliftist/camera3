@@ -13,11 +13,9 @@ import { binarySearchBasic, list } from "socket-function/src/misc";
 import { Icon } from "./icons";
 import { getVideoIndexSynced } from "./videoLookup";
 import { getTimeFolder } from "./frameEmitHelpers";
-import { getSpeed } from "./urlParams";
+import { getSpeed, gridSizeURL, incrementTypeURL } from "./urlParams";
 import { filterToRange, getThumbnailRange } from "./videoHelpers";
 
-const incrementTypeURL = new URLParamStr("inc");
-const gridSizeURL = new URLParamStr("gridSize");
 
 @observer
 export class VideoGrid extends preact.Component<{
@@ -27,7 +25,14 @@ export class VideoGrid extends preact.Component<{
     synced = observable({
         expanded: false,
         viewTime: 0,
+        viewAddStartRanges: 0,
+        viewAddEndRanges: 0,
     });
+    setViewTime(time: number) {
+        this.synced.viewTime = time;
+        this.synced.viewAddStartRanges = 0;
+        this.synced.viewAddEndRanges = 0;
+    }
     render() {
         let gridSize = +gridSizeURL.value || 200;
 
@@ -40,7 +45,15 @@ export class VideoGrid extends preact.Component<{
         );
         let subIncrement = incrementSubs[currentIncrement].subType;
         let currentTime = this.synced.viewTime || state.targetTime;
-        let subRanges = getIncrementSubRanges(currentTime, currentIncrement);
+        let startTime = getStartOfIncrement(currentTime, currentIncrement);
+        let endTime = getNextIncrement(startTime, currentIncrement);
+        for (let i = 0; i < this.synced.viewAddStartRanges; i++) {
+            startTime = getPrevIncrement(startTime, currentIncrement);
+        }
+        for (let i = 0; i < this.synced.viewAddEndRanges + 1; i++) {
+            endTime = getNextIncrement(endTime, currentIncrement);
+        }
+        let subRanges = getIncrementSubRangesBase(startTime, endTime, subIncrement);
 
         function getRangeData(range: { start: number; end: number }) {
             let index = getVideoIndexSynced();
@@ -82,11 +95,11 @@ export class VideoGrid extends preact.Component<{
                                 .colorhsl(0, 0, 70)
                                 .pad2(0, 10)
                         }
-                        onClick={() => this.synced.viewTime = getPrevIncrement(currentTime, currentIncrement)}
+                        onClick={() => this.setViewTime(getPrevIncrement(startTime, currentIncrement))}
                     >
                         {Icon.chevronDoubleLeft()}
                         <div className={css.marginAuto} />
-                        {formatSingleIncrement(getPrevIncrement(currentTime, currentIncrement), currentIncrement)}
+                        {formatSingleIncrement(getPrevIncrement(startTime, currentIncrement), currentIncrement)}
                         <div className={css.marginAuto} />
                         {Icon.chevronDoubleLeft()}
                     </div>
@@ -137,15 +150,28 @@ export class VideoGrid extends preact.Component<{
                                 </div>
                             </div>
                         </div>
-                        <div className={css.hbox(14).pad2(0, 10).wrap.overflowAuto}>
+                        <div className={css.hbox(14).pad2(2, 10).wrap.overflowAuto}>
+                            <div className={css.fillWidth.margin(5).center.hbox(20)}>
+                                <Button onClick={() => this.synced.viewAddStartRanges++}>
+                                    + Previous {currentIncrement}
+                                </Button>
+                                <Button onClick={() => this.synced.viewAddStartRanges = 0}>
+                                    Reset Previous
+                                </Button>
+                                <div>
+                                    ({formatFullIncrement(startTime, currentIncrement, "long")})
+                                </div>
+                            </div>
                             {subRanges.ranges.map(range => {
                                 let rangeRange = range.end - range.start;
 
                                 let { ranges, thumb, thumbIsGood } = getRangeData(range);
+                                if (ranges.length === 0) return undefined;
+                                if (!thumbIsGood) return undefined;
 
                                 let isCenter = range.start <= currentTime && currentTime < range.end;
                                 let drillDown = () => {
-                                    this.synced.viewTime = range.start;
+                                    this.setViewTime(range.start);
                                     incrementTypeURL.value = subIncrement;
                                 };
                                 return (
@@ -158,8 +184,11 @@ export class VideoGrid extends preact.Component<{
                                             // + (!thumbIsGood && css.bord(1, "hsl(0, 0%, 60%)"))
                                             // + css.outline("1px solid hsl(0, 0%, 60%)", "hover")
                                         }
-                                        title={`${thumb && !thumbIsGood && `(${thumb})` || ""} ${formatFullIncrement(range.start, subIncrement, "long")} ${getTimeFolder({ time: range.start, speedMultiplier: getSpeed() })}`}
-                                        onClick={(e) => videoManager.seekToTime(range.start)}
+                                        title={`${thumb && !thumbIsGood && `(${thumb})` || ""} ${formatFullIncrement(range.start, subIncrement, "long")} ${formatTime(ranges.map(x => x.endTime - x.time).reduce((a, b) => a + b, 0))}`}
+                                        onClick={(e) => {
+                                            videoManager.seekToTime(range.start);
+                                            videoManager.play();
+                                        }}
                                         onMouseDown={e => {
                                             // If right click
                                             if (e.button === 1) {
@@ -185,15 +214,38 @@ export class VideoGrid extends preact.Component<{
                                                 .offsety("-100%")
                                                 .hsl(103, 90, 73)
                                         } />)}
-                                        <Button onClick={() => drillDown()}>
-                                            View Range
-                                        </Button>
+                                        <div className={css.hbox(10)}>
+                                            <Button onClick={e => { e.stopPropagation(); drillDown(); }}>
+                                                View Range
+                                            </Button>
+                                            <Button onClick={e => { e.stopPropagation(); videoManager.seekToTime(range.start); }}>
+                                                Seek To
+                                            </Button>
+                                            <Button onClick={e => {
+                                                e.stopPropagation();
+                                                videoManager.seekToTime(range.start);
+                                                videoManager.play();
+                                            }}>
+                                                Play
+                                            </Button>
+                                        </div>
                                     </div>
                                 );
                             })}
                             {subRanges.ranges.length === 0 &&
                                 <h1>(No videos in range)</h1>
                             }
+                            <div className={css.fillWidth.margin(5).center.hbox(10)}>
+                                <Button onClick={() => this.synced.viewAddEndRanges++}>
+                                    + Next {currentIncrement}
+                                </Button>
+                                <Button onClick={() => this.synced.viewAddEndRanges = 0}>
+                                    Reset Next
+                                </Button>
+                                <div>
+                                    ({formatFullIncrement(endTime, currentIncrement, "long")})
+                                </div>
+                            </div>
                         </div>
                         <div
                             className={
@@ -208,7 +260,7 @@ export class VideoGrid extends preact.Component<{
                             }
                             onClick={() => {
                                 this.synced.expanded = false;
-                                this.synced.viewTime = 0;
+                                this.setViewTime(0);
                                 incrementTypeURL.value = "";
                             }}
                         >
@@ -225,11 +277,11 @@ export class VideoGrid extends preact.Component<{
                                 .colorhsl(0, 0, 70)
                                 .pad2(0, 10)
                         }
-                        onClick={() => this.synced.viewTime = getNextIncrement(currentTime, currentIncrement)}
+                        onClick={() => this.setViewTime(getNextIncrement(endTime - 0.01, currentIncrement))}
                     >
                         {Icon.chevronDoubleRight()}
                         <div className={css.marginAuto} />
-                        {formatSingleIncrement(getNextIncrement(currentTime, currentIncrement), currentIncrement)}
+                        {formatSingleIncrement(getNextIncrement(endTime - 0.01, currentIncrement), currentIncrement)}
                         <div className={css.marginAuto} />
                         {Icon.chevronDoubleRight()}
                     </div>
@@ -273,10 +325,23 @@ export let incrementUps: { [key in IncrementType]: IncrementType } = {
 
 export function getStartOfIncrement(time: number, type: IncrementType): number {
     let d = new Date(time);
+    function resetMilli() {
+        // Just use times, as Date incorrectly handle DST
+        d = new Date(+d - d.getMilliseconds());
+    }
+    function resetSeconds() {
+        resetMilli();
+        d = new Date(+d - d.getSeconds() * 1000);
+    }
+    function resetMinutes() {
+        resetSeconds();
+        d = new Date(+d - d.getMinutes() * 60000);
+    }
+
     if (type === "second") {
-        d.setMilliseconds(0);
+        resetMilli();
     } else if (type === "second2") {
-        d.setMilliseconds(0);
+        resetMilli();
         // Round to nearest 2 seconds
         let seconds = d.getSeconds();
         let half = seconds % 2 === 1;
@@ -284,36 +349,26 @@ export function getStartOfIncrement(time: number, type: IncrementType): number {
             d.setSeconds(seconds - 1);
         }
     } else if (type === "minute") {
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetSeconds();
     } else if (type === "minute2") {
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetSeconds();
         // Round to nearest 2 minutes
         let minutes = d.getMinutes();
         let half = minutes % 2 === 1;
         if (half) {
-            d.setMinutes(minutes - 1);
+            d = new Date(+d - 60000);
         }
     } else if (type === "hour") {
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
     } else if (type === "hour6") {
         d.setHours(Math.floor(d.getHours() / 6) * 6);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
     } else if (type === "day") {
         d.setHours(0);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
     } else if (type === "week") {
         d.setHours(0);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
         d.setDate(d.getDate() - d.getDay());
     } else if (type === "week2") {
         // Only land on even weeks, numbering weeks from the epoch
@@ -325,27 +380,19 @@ export function getStartOfIncrement(time: number, type: IncrementType): number {
         if (!even) diff++;
         d.setTime(epochWeek + diff * 86400000 * 7);
         d.setHours(0);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
     } else if (type === "month") {
         d.setHours(0);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
         d.setDate(1);
     } else if (type === "year") {
         d.setHours(0);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
         d.setMonth(0);
         d.setDate(1);
     } else if (type === "decade") {
         d.setHours(0);
-        d.setMinutes(0);
-        d.setSeconds(0);
-        d.setMilliseconds(0);
+        resetMinutes();
         d.setMonth(0);
         d.setDate(1);
         d.setFullYear(Math.floor(d.getFullYear() / 10) * 10);
@@ -371,9 +418,24 @@ export function incrementMedianSize(type: IncrementType): number {
     throw new Error("Unhandled type: " + unhandled);
 }
 export function getNextIncrement(time: number, type: IncrementType): number {
+    let baseTime = time;
     time = getStartOfIncrement(time, type);
     time += incrementMedianSize(type) * 1.5;
-    return getStartOfIncrement(time, type);
+    time = getStartOfIncrement(time, type);
+    if (time <= baseTime) {
+        // Happens due to daylight savings time
+        time = getStartOfIncrement(baseTime, type);
+        time += incrementMedianSize(type) * 2.5;
+        time = getStartOfIncrement(time, type);
+    }
+    if (time <= baseTime) {
+        // Time went backwards. We had issues related to DST here before, maybe this is similar?
+        debugger;
+        time = getStartOfIncrement(baseTime, type);
+        time += incrementMedianSize(type) * 2.5;
+        time = getStartOfIncrement(time, type);
+    }
+    return time;
 }
 export function getPrevIncrement(time: number, type: IncrementType): number {
     time = getStartOfIncrement(time, type);
@@ -470,9 +532,17 @@ export function getIncrementSubRanges(time: number, type: IncrementType, subType
 } {
     let start = getStartOfIncrement(time, type);
     let end = getNextIncrement(time, type);
+    return getIncrementSubRangesBase(start, end, subType);
+}
+export function getIncrementSubRangesBase(start: number, end: number, subType: IncrementType): {
+    ranges: {
+        start: number;
+        end: number;
+    }[];
+} {
     let cur = start;
     let ranges: { start: number; end: number; }[] = [];
-    while (true) {
+    while (ranges.length < 240) {
         let next = getNextIncrement(cur, subType);
         ranges.push({ start: cur, end: next, });
         cur = next;

@@ -6,56 +6,10 @@ import { formatNumber, formatTime } from "socket-function/src/formatting/format"
 import { decodeVideoKey } from "./videoHelpers";
 import { videoFolder } from "./frameEmitHelpers";
 import { MAX_DISK_USAGE } from "./constants";
+import { recursiveIterate, safeUnlink, safeReadDir } from "./readHelpers";
 
 
 
-
-async function safeReadDir(folder: string) {
-    // Wait, so we don't overwhelm the file system (especially FAT, which breaks
-    //  other writes if we overwhelm it)
-    await delay(10);
-    try {
-        return await fs.promises.readdir(folder);
-    } catch (e) {
-        console.error("Error reading directory, skipping", folder, e);
-        return [];
-    }
-}
-async function safeStat(file: string) {
-    try {
-        return await fs.promises.stat(file);
-    } catch (e) {
-        console.error("Error stating file, skipping", file, e);
-        return undefined;
-    }
-}
-
-async function* recursiveIterate(folder: string): AsyncGenerator<{
-    path: string;
-    size: number;
-}> {
-    let files = await safeReadDir(folder);
-    for (let file of files) {
-        let stat = await safeStat(folder + file);
-        if (!stat) continue;
-        if (stat.isDirectory()) {
-            yield* recursiveIterate(folder + file + "/");
-        } else {
-            yield {
-                path: folder + file,
-                size: stat.size,
-            };
-        }
-    }
-}
-async function safeUnlink(file: string) {
-    await delay(10);
-    try {
-        return await fs.promises.unlink(file);
-    } catch (e) {
-        console.error("Error unlinking file, skipping", file, e);
-    }
-}
 
 async function limitFiles() {
     console.log(`Starting file limit at ${new Date().toISOString()}`);

@@ -4,7 +4,7 @@ import { css } from "typesafecss";
 
 @observer
 export class Button extends preact.Component<{
-    onClick?: () => void;
+    onClick?: (e: preact.JSX.TargetedEvent<HTMLElement>) => void;
     hue?: number;
     saturation?: number;
     lightness?: number;
@@ -29,7 +29,7 @@ export class Button extends preact.Component<{
                 onClick={e => {
                     // Prevent default, to prevent selection
                     e.preventDefault();
-                    this.props.onClick?.();
+                    this.props.onClick?.(e);
                 }}
             >
                 <div className={

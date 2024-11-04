@@ -6,12 +6,14 @@ import { JSONStorage } from "./JSONStorage";
 import { StorageSync } from "./StorageObservable";
 import { TransactionStorage } from "./TransactionStorage";
 import { PendingStorage } from "./PendingStorage";
+import { observable } from "../misc/mobxTyped";
 
 export class DiskCollection<T> implements IStorageSync<T> {
     constructor(
         private collectionName: string,
         private writeDelay?: number,
-    ) { }
+    ) {
+    }
     async initStorage(): Promise<IStorage<T>> {
         if (isNode()) return undefined as any;
         let fileStorage = await getFileStorage();

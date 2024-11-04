@@ -12,9 +12,8 @@ import { Trackbar } from "./Trackbar";
 import { VideoGrid } from "./VideoGrid";
 import { Button } from "./Button";
 import { getFileStorage } from "./storage/FileFolderAPI";
-import { getSpeed, getVideoRate } from "./urlParams";
+import { getSelectedTimeRange, getSpeed, getVideoRate, loopTimeRangeURL, playTimeURL, setSelectedTimeRange } from "./urlParams";
 
-let playTimeURL = new URLParamStr("t");
 const updatePlayTime = throttleFunction(5000, (time: number) => {
     playTimeURL.value = Math.floor(time / 1000) * 1000 + "";
 });
@@ -115,7 +114,7 @@ export class VideoPlayer extends preact.Component {
                                 let curBitRate = videoObj.size / playbackDuration * 1000;
                                 return (
                                     <div>
-                                        {curFPS.toFixed(2)} FPS /// {formatNumber(curBitRate)}B/s
+                                        {curFPS.toFixed(2)} FPS /// {formatNumber(curBitRate)}B/s /// {videoObj.frames} frames
                                     </div>
                                 );
                             })()}
@@ -136,6 +135,9 @@ export class VideoHeader extends preact.Component<{
         let manager = this.props.manager;
         let isLive = Date.now() - manager.state.targetTimeThrottled < timeInMinute * 2;
         let playState = manager.getPlayState();
+
+        let timeRange = getSelectedTimeRange();
+
         return (
             <div className={css.fillWidth.hbox(10).center.marginBottom(10)}>
                 <Button
@@ -164,6 +166,68 @@ export class VideoHeader extends preact.Component<{
                 >
                     Seek to Live
                 </Button>
+                {!timeRange && <Button
+                    onClick={() => {
+                        let time = manager.state.targetTimeThrottled;
+                        setSelectedTimeRange({ start: time, end: time });
+                    }}
+                >
+                    Select Range
+                </Button>}
+                {timeRange &&
+                    <div className={css.hbox(10).hsla(160, 50, 50, 0.4).pad2(10, 2)}>
+                        <b>Selected</b>
+                        <span>{formatTime(timeRange.end - timeRange.start)}</span>
+                        <label className={css.hbox(2)}>
+                            Loop
+                            <input
+                                checked={!!loopTimeRangeURL.value}
+                                type="checkbox"
+                                onChange={e => {
+                                    if (e.currentTarget.checked) {
+                                        loopTimeRangeURL.value = "1";
+                                    } else {
+                                        loopTimeRangeURL.value = "";
+                                    }
+                                }}
+                            />
+                        </label>
+                        <Button onClick={() => {
+                            manager.seekToTime(timeRange.start);
+                            manager.play();
+                        }}>
+                            Play
+                        </Button>
+                        <Button onClick={() => {
+                            manager.seekToTime(timeRange.start);
+                        }}>
+                            Seek
+                        </Button>
+
+                        <input
+                            value={formatDateTimeForInput(timeRange.start)}
+                            type="datetime-local"
+                            onChange={e => {
+                                let date = new Date(e.currentTarget.value);
+                                timeRange.start = date.getTime();
+                                setSelectedTimeRange(timeRange);
+                            }}
+                        />
+                        <span>to</span>
+                        <input
+                            value={formatDateTimeForInput(timeRange.end)}
+                            type="datetime-local"
+                            onChange={e => {
+                                let date = new Date(e.currentTarget.value);
+                                timeRange.end = date.getTime();
+                                setSelectedTimeRange(timeRange);
+                            }}
+                        />
+                        <Button onClick={() => setSelectedTimeRange(undefined)}>
+                            Unselect
+                        </Button>
+                    </div>
+                }
             </div>
         );
     }

@@ -94,17 +94,13 @@ export function getVideoIndexSynced(): VideoIndex {
 
     let maxGap = getRangeMaximumGap();
 
-    // 1) Remove overlapping, taking highest [priority, duration]
     let overlap = 0;
     for (let i = allFiles.length - 1; i >= 1; i--) {
         let cur = allFiles[i];
         let prev = allFiles[i - 1];
         if (cur.startTime < prev.endTime) {
             overlap++;
-            if (
-                cur.priority > prev.priority
-                || cur.priority === prev.priority && cur.duration > prev.duration
-            ) {
+            if (cur.duration > prev.duration) {
                 allFiles.splice(i - 1, 1);
             } else {
                 allFiles.splice(i, 1);
@@ -311,6 +307,10 @@ export const pollVideoFilesNow = throttleFunction(0, async function pollNow() {
     if (duration > 100 || folderCheckCount > 100 || changeCount > 0) {
         console.log(`Checked ${folderCheckCount} folders, ${changeCount} changes in ${formatTime(duration)}`);
     }
+    localStorage.setItem(lastScanKey, JSON.stringify({
+        time: Date.now(),
+        duration,
+    }));
 });
 
 const startPoll = lazy(async () => {

@@ -9,44 +9,17 @@ Sometimes the usb drive crashes!
     - Could have been out of CMA memory. So we increased it to 64MB.
 
 
-
-
 Verify activity.ts is efficient, and uses the last used time to not re-check good activity
-
-
-
-
-Show fill overlay for time increment selectors, instead of number
-    - Show number in the title, on hover
-
-
-Make sure live video roughly works (it might be a minute or two delayed, but it should still play constantly, and never get stuck)
-
-
-MANY thumbnails show no activity, BUT, how is that possible? Shouldn't activity.py pick the best one?
-    - Check by looping that activity, to see if there is a better frame
-    - Check the disk, etc.
-
-
-Playback mapping time is broken
-    (The "extending to the next video" gap is probably too short, it should be only a few frames, instead of the entire length of the segment).
-    - http://localhost:4040/?t=1730572442000&p=&inc=day&gridSize=200&speed=3600x&rate=1
-    - The video is correctly written to disk as "2024/11/02 02:00:01 PM to 2024/11/02 02:59:37 PM"
-    - However, when we seek, we don't map the track times to the video correctly
-
-Video seems to have frames out of order???
-    - http://localhost:4040/?t=1730619684000&p=&inc=&gridSize=400&speed=600x&rate=1&timeRange=1730619684694.8142-1730620197046.5625
-
-
 
 
 VERSION 2
 
-Fix 60x video
-    - We are getting 15FPS on it, when it should be 30FPS. Not a major bug, but annoying, and might be a sign of an issue with how we append to video. Higher rates are 30FPS, so... not sure what's going on with it.
-    - ALSO, this means we only have 4s resolution, instead of 2s. WHICH, is very annoying
-        - Maybe we should just add 15x video, to give us 1s resolution.
-        - We SHOULD be able to use this with activity tracking, but... it cuts it close to us running out of processing power.
+Expose over HTTP, to massively improve the speed
+    - The FileSystemAPI appears to be entirely in serial? OR SSHFS is entirely in serial?
+    - We will need to secure it, but... that shouldn't be impossible.
+    - Ugh... we need HTTPS, whic his annoying, but... I guess we can do that...
+    - Support PUT, and make it expose FileSystemAPI
+        - Add a button beside "Change Video Folder" and "Select Folder", to "set URL"
 
 Re-encode video after finding activity
     - Will greatly reduce the size, allowing us to play the video at a much higher rate

@@ -23,8 +23,9 @@ export class VideoGrid2 extends preact.Component<{
     defaultIncrement?: IncrementType;
 }> {
     synced = observable({
-        expanded: false,
+        expanded: 0,
         viewTime: 0,
+        activityThreshold: 300 * 300,
     });
     setViewTime(time: number) {
         this.synced.viewTime = time;
@@ -53,7 +54,7 @@ export class VideoGrid2 extends preact.Component<{
                             .hsl(0, 0, 20)
                             .button
                     }
-                    onClick={() => this.synced.expanded = true}
+                    onClick={() => this.synced.expanded = 1}
                 >
                     {Icon.chevronDoubleUp()}
                 </div>
@@ -67,7 +68,29 @@ export class VideoGrid2 extends preact.Component<{
         let ranges = filterToRange(index.ranges, { start: startTime, end: endTime });
 
         return (
-            <div className={css.vbox(10).fillHeight.maxHeight("50vh").pad2(10).margins2(10).width(`calc(100% - 20px)`).hsl(0, 0, 10).minHeight(0)}>
+            <div className={
+                css.vbox(10).fillHeight.pad2(10).margins2(10).width(`calc(100% - 20px)`).hsl(0, 0, 10).minHeight(0)
+                + (this.synced.expanded === 1 && css.maxHeight("50vh"))
+                + (this.synced.expanded === 2 && css.maxHeight("70vh"))
+                + (this.synced.expanded === 2 && css.maxHeight("100%"))
+            }>
+                <div
+                    className={
+                        css.size("100%", 50).center
+                            .hbox(10)
+                            .textAlign("center")
+                            .hsl(0, 0, 5).background("hsl(0, 0%, 15%)", "hover", "important")
+                            .pointer
+                            .colorhsl(0, 0, 70)
+                            .pad2(10, 0)
+                            .flexShrink0
+                    }
+                    onClick={() => {
+                        this.synced.expanded++;
+                    }}
+                >
+                    {Icon.chevronDoubleUp()}
+                </div>
                 <div className={
                     css.hbox(20).fillWidth
                 }>
@@ -95,6 +118,14 @@ export class VideoGrid2 extends preact.Component<{
                             </Button>
                         )}
                     </div>
+                    <label className={css.hbox(4)}>
+                        <span>Threshold Pixels</span>
+                        <input
+                            value={this.synced.activityThreshold}
+                            type="number"
+                            onChange={e => this.synced.activityThreshold = +e.currentTarget.value}
+                        />
+                    </label>
                 </div>
                 <div className={css.fillWidth.hbox(20)}>
                     <Button onClick={e => {
@@ -115,13 +146,18 @@ export class VideoGrid2 extends preact.Component<{
                 </div>
                 <div className={css.hbox(14).pad2(2, 10).wrap.overflowAuto}>
                     {ranges.map(range => {
-                        let thumb = getThumbnailRange(gridSize, { start: range.startTime, end: range.endTime });
+                        let thumb = getThumbnailRange(gridSize, {
+                            start: range.startTime,
+                            end: range.endTime,
+                            threshold: this.synced.activityThreshold
+                        });
                         let isCenter = range.startTime <= currentTime && range.endTime > currentTime;
                         let drillDown = () => {
                             this.setViewTime(range.startTime);
                             incrementTypeURL.value = subIncrement;
                         };
                         let thumbIsGood = thumb.startsWith("data:");
+                        if (!thumbIsGood) return undefined;
                         return (
                             <div
                                 className={
@@ -194,7 +230,7 @@ export class VideoGrid2 extends preact.Component<{
                             .flexShrink0
                     }
                     onClick={() => {
-                        this.synced.expanded = false;
+                        this.synced.expanded = 0;
                         this.setViewTime(0);
                         incrementTypeURL.value = "";
                     }}
@@ -221,7 +257,6 @@ class CascadingRangeSelector extends preact.Component<{
         const { firstTime, lastTime, setTime, increment, setIncrement } = this.props;
         let { time } = this.props;
         const viewTypes: IncrementType[] = [
-            "decade",
             "year",
             "month",
             "day",

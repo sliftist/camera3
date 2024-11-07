@@ -94,7 +94,7 @@ export class Page extends preact.Component {
                         <IndexInfo />
                         <label className={css.hbox(4)}>
                             <span>Adjust Rate</span>
-                            <Button onClick={() => adjustRateURL.value = +adjustRateURL.value * 0.5 + ""}>
+                            <Button onClick={() => adjustRateURL.value = (+adjustRateURL.value || 1) * 0.5 + ""}>
                                 0.5x
                             </Button>
                             <input
@@ -102,9 +102,9 @@ export class Page extends preact.Component {
                                 value={adjustRateURL.value || 1}
                                 type="number"
                                 step={0.1}
-                                onChange={e => adjustRateURL.value = e.currentTarget.value}
+                                onChange={e => adjustRateURL.value = Math.min(16, +e.currentTarget.value) + ""}
                             />
-                            <Button onClick={() => adjustRateURL.value = +adjustRateURL.value * 2 + ""}>
+                            <Button onClick={() => adjustRateURL.value = Math.min(16, (+adjustRateURL.value || 1) * 2) + ""}>
                                 2x
                             </Button>
                         </label>

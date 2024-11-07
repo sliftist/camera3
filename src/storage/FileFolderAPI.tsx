@@ -13,6 +13,8 @@ let displayData = observable({
     ui: undefined as undefined | preact.ComponentChildren,
 }, undefined, { deep: false });
 
+const storageKey = "syncFileSystemCamera3";
+
 @observer
 class DirectoryPrompter extends preact.Component {
     render() {
@@ -41,7 +43,7 @@ export const getDirectoryHandle = lazy(async function getDirectoryHandle(): Prom
 
         let handle: FileSystemDirectoryHandle | undefined;
 
-        let storedId = localStorage.getItem("syncFileSystem");
+        let storedId = localStorage.getItem(storageKey);
         if (storedId) {
             let doneLoad = false;
             setTimeout(() => {
@@ -70,7 +72,7 @@ export const getDirectoryHandle = lazy(async function getDirectoryHandle(): Prom
                     const handle = await window.showDirectoryPicker();
                     await handle.requestPermission({ mode: "readwrite" });
                     let storedId = await storeFileSystemPointer({ mode: "readwrite", handle });
-                    localStorage.setItem("syncFileSystem", storedId);
+                    localStorage.setItem(storageKey, storedId);
                     handleToId.set(handle, storedId);
                     fileCallback(handle);
                 }}
@@ -107,7 +109,7 @@ export const getFileStorageRoot = lazy(async function getFileStorage(): Promise<
     return wrapHandle(handle, id);
 });
 export function resetStorageLocation() {
-    localStorage.removeItem("syncFileSystem");
+    localStorage.removeItem(storageKey);
     window.location.reload();
 }
 
@@ -225,6 +227,7 @@ function wrapHandleFiles(handle: FileSystemDirectoryHandle): IStorageRaw {
 }
 
 function wrapHandleNested(handle: FileSystemDirectoryHandle, id: string): NestedFileStorage {
+    let dirHandleCache = new Map<string, Promise<FileSystemDirectoryHandle | undefined>>();
 
     async function getNestedFileHandle(path: string[], create?: "create"): Promise<FileSystemFileHandle | undefined> {
         let curDir = handle;
@@ -232,11 +235,25 @@ function wrapHandleNested(handle: FileSystemDirectoryHandle, id: string): Nested
         for (let i = 0; i < path.length - 1; i++) {
             let part = path[i];
             if (!part) continue;
-            try {
-                // NOTE: We don't create directories here, because if the final file isn't found,
-                //  we don't want to create the directory structure.
-                curDir = await curDir.getDirectoryHandle(part, { create: false });
-            } catch {
+            let curPath = path.slice(0, i + 1).join("/");
+            let cached = dirHandleCache.get(curPath);
+            let nextDir: FileSystemDirectoryHandle | undefined;
+            if (cached) {
+                nextDir = await cached;
+            } else {
+                let promise = (async () => {
+                    try {
+                        // NOTE: We don't create directories here, because if the final file isn't found,
+                        //  we don't want to create the directory structure.
+                        return await curDir.getDirectoryHandle(part, { create: false });
+                    } catch {
+                        return undefined;
+                    }
+                })();
+                dirHandleCache.set(curPath, promise);
+                nextDir = await promise;
+            }
+            if (!nextDir) {
                 // Create dir and file
                 if (create) {
                     for (let j = i; j < path.length - 1; j++) {
@@ -248,6 +265,7 @@ function wrapHandleNested(handle: FileSystemDirectoryHandle, id: string): Nested
                 }
                 return undefined;
             }
+            curDir = nextDir;
         }
 
         try {

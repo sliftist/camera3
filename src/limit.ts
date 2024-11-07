@@ -68,6 +68,8 @@ async function limitFiles() {
         if (excessSize < 0) {
             sizePerSpeed += -excessSize / remainingSpeedFolders;
         }
+        console.log(`Finished ${speedFolder}, ${formatNumber(totalSize)}B, ${formatNumber(excessSize)}B excess`);
+        console.log();
     }
 
     let totalTime = Date.now() - time;
@@ -78,6 +80,8 @@ async function limitFiles() {
     }
 
     console.log(`Finished file limit at ${new Date().toISOString()}`);
+    console.log();
+    console.log();
 }
 
 async function main() {

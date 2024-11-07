@@ -79,9 +79,9 @@ export class VideoPlayer extends preact.Component {
                     `}
                 </style>
                 {this.videoManager && <VideoHeader manager={this.videoManager} />}
-                <div className={css.fillBoth.minHeight(200).relative.flexShrink(100000) + " VideoPlayer-video"}>
+                <div className={css.fillBoth.minHeight(100).relative.flexShrink(100000) + " VideoPlayer-video"}>
                     <video
-                        className={css.fillBoth.minHeight(200).pointer}
+                        className={css.fillBoth.pointer}
                         ref={newVideo => {
                             if (!newVideo) return;
                             if (this.videoManager) return;
@@ -161,6 +161,7 @@ export class VideoHeader extends preact.Component<{
                 <Button
                     saturation={!isLive ? -30 : 0}
                     onClick={() => {
+                        loopTimeRangeURL.value = "";
                         void manager.seekToTime(Date.now());
                     }}
                 >

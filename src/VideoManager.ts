@@ -105,6 +105,10 @@ export class VideoManager {
                 this.syncUnderlyingVideoElement({ event });
             });
         }
+        setInterval(() => {
+            // HACK: Periodically sync, in case something changes and we don't get an event
+            this.syncUnderlyingVideoElement({ event: "interval" });
+        }, 1000);
     }
 
     private isVideoPlaying() {
@@ -178,8 +182,8 @@ export class VideoManager {
         }
 
         let selectedRange = getSelectedTimeRange();
-        console.log({ time: this.state.targetTime, endt: selectedRange?.end });
         if (selectedRange && !loopTimeRangeURL.value && this.state.targetTime > selectedRange.end) {
+            console.warn("Pausing video because we are beyond end of selected range");
             this.pause();
             this.syncUnderlyingVideoElement({ seekToTime: selectedRange.end });
             return;
@@ -209,7 +213,7 @@ export class VideoManager {
                 //  last few frames of video after the video dies (ex, if your power went out). Too long,
                 //  and any issues with currentTime stopping early (ex, if we are off by a frame in our
                 //  time estimate), and the gap jumping won't work.
-                let video = await this.config.findVideo(time + 0.2 * 1000 * getSpeed());
+                let video = await this.config.findVideo(time + 0.2 * 1000 * getSpeed() * getVideoRate());
                 let nextVideo = await this.config.findNextVideo(time);
                 // If the state changed abort.
                 if (this.state.targetTime !== time) return;
@@ -220,8 +224,10 @@ export class VideoManager {
                 }
                 if (selectedRange && nextVideo && decodeVideoKey(nextVideo).startTime > selectedRange.end) {
                     if (loopTimeRangeURL.value) {
+                        console.warn("Looping video");
                         this.syncUnderlyingVideoElement({ seekToTime: selectedRange.start });
                     } else {
+                        console.warn("Pausing video at end of selected range");
                         this.pause();
                         this.syncUnderlyingVideoElement({ seekToTime: selectedRange.end });
                     }
@@ -231,7 +237,7 @@ export class VideoManager {
                 if (nextVideo) {
                     // We found a gap, so skip it
                     let obj = decodeVideoKey(nextVideo);
-                    console.warn(`Skipping gap from ${formatDateTime(this.state.targetTime)} to ${formatDateTime(obj.startTime)}`);
+                    console.warn(`Skipping gap (${config.event}) from ${formatDateTime(this.state.targetTime)} to ${formatDateTime(obj.startTime)}`);
                     this.syncUnderlyingVideoElement({ seekToTime: obj.startTime });
                 } else {
                     // We hit the end, so wait
@@ -274,7 +280,7 @@ export class VideoManager {
 
         let sourceBuffer = await this.getSourceBuffer(targetTime);
 
-        let timeToBuffer = getCurrentBufferDuration();
+        let timeToBuffer = getCurrentBufferDuration() * getVideoRate();
 
         let video = await this.config.findVideo(targetTime);
         if (!video) {
@@ -528,10 +534,10 @@ export class VideoManager {
 
         const hotkeyHandlers: Record<string, () => void> = {
             "ArrowUp": () => {
-                adjustRateURL.value = (+adjustRateURL.value || 0) * 2 + "";
+                adjustRateURL.value = (+adjustRateURL.value || 1) * 2 + "";
             },
             "ArrowDown": () => {
-                adjustRateURL.value = (+adjustRateURL.value || 0) * 0.5 + "";
+                adjustRateURL.value = (+adjustRateURL.value || 1) * 0.5 + "";
             },
             "m": () => {
                 if (!videoElement) return;
@@ -631,9 +637,11 @@ export class VideoManager {
     public play() {
         this.state.videoWantsToPlay = true;
         void this.config.element.play();
+        this.syncUnderlyingVideoElement({});
     }
     public pause() {
         this.state.videoWantsToPlay = false;
         void this.config.element.pause();
+        this.syncUnderlyingVideoElement({});
     }
 }

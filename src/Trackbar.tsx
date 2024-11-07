@@ -139,10 +139,12 @@ export class Trackbar extends preact.Component<{
                                         .fillBoth
                                 } />}
                                 <span className={
-                                    css.absolute.pos(0, 0).fillBoth.center
+                                    css.absolute.pos(0, 0).fillBoth.flex.alignStart
                                         .fontSize(18).boldStyle
                                 }>
-                                    <div className={css.background("hsla(0, 0%, 0%, 0.65)").pad2(4, 2).zIndex(3)}>
+                                    <div className={css.background("hsla(0, 0%, 0%, 0.65)").pad2(4, 2).zIndex(3)
+                                        .width("calc(100% - 5px)").textAlign("center")
+                                    }>
                                         {formatSingleIncrement(segment.start, increment)}
                                     </div>
                                 </span>

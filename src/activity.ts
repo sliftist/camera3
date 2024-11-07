@@ -58,6 +58,14 @@ async function getVideoActivity(path: string): Promise<boolean> {
     }
 }
 
+async function exists(path: string) {
+    try {
+        await fs.promises.access(path);
+        return true;
+    } catch { }
+    return false;
+}
+
 async function deleteStaticVideo1x() {
     let activityRangesRaw: { start: number; end: number; path: string; }[] = [];
     for await (let { path, size } of recursiveIterate(rootDir + "60x/")) {
@@ -84,21 +92,19 @@ async function deleteStaticVideo1x() {
             if (activityRange.end > range.start) {
                 // Copy previews, so we have them for 1x video
                 for (let { suffix } of jpegSuffixes) {
-                    let previewPath = range.path + suffix;
-                    let previewPathNew = activityRange.path + suffix;
+                    let previewPath = activityRange.path + suffix;
+                    let previewPathNew = range.path + suffix;
                     // Only copy if it doesn't exist
+                    if (!await exists(previewPath)) continue;
+                    if (await exists(previewPathNew)) continue;
                     try {
-                        await fs.promises.access(previewPathNew);
-                    } catch {
+                        await fs.promises.copyFile(previewPath, previewPathNew);
                         try {
-                            await fs.promises.copyFile(previewPath, previewPathNew);
-                            try {
-                                await fs.promises.copyFile(previewPath + ".metadata", previewPathNew + ".metadata");
-                            } catch { }
-                            copiedPreviews++;
-                        } catch (e) {
-                            console.error(`Error copying preview: ${previewPath} to ${previewPathNew}`, e);
-                        }
+                            await fs.promises.copyFile(previewPath + ".metadata", previewPathNew + ".metadata");
+                        } catch { }
+                        copiedPreviews++;
+                    } catch (e) {
+                        console.error(`Error copying preview: ${previewPath} to ${previewPathNew}`, e);
                     }
                 }
                 return true;
@@ -203,6 +209,8 @@ async function deleteStaticVideo(speed: number) {
     let totalTime = Date.now() - startIterationTime;
 
     console.log(`${new Date().toISOString()}   Finished deleting static videos for ${speed}x in ${formatTime(totalTime)}. Active: ${activityCount}, Static: ${staticCount}`);
+    console.log(`    max read time: ${formatDateTime(lastReadTime)}`);
+    console.log();
 }
 
 async function iterateOnce() {

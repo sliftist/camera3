@@ -115,7 +115,11 @@ const hackThumbnailLoadFlag = lazy(() => {
     }, 30000);
 });
 
-export function getThumbnailRange(maxDim: number, range: { start: number; end: number; }): string {
+export function getThumbnailRange(maxDim: number, range: {
+    start: number;
+    end: number;
+    threshold?: number;
+}): string {
     let index = getVideoIndexSynced();
     // Prefer the center of the video, as when we have activity, this is likely
     //  where activity is happening.
@@ -157,10 +161,14 @@ export function getThumbnailRange(maxDim: number, range: { start: number; end: n
             videoByActivity.push({ video, activity });
         }
     }
-    sort(videoByActivity, x => -x.activity);
-    let bestVideo = videoByActivity[0]?.video.file;
+
     if (anyLoading) return "loading";
-    if (!bestVideo) return "";
+
+    sort(videoByActivity, x => -x.activity);
+    let bestObj = videoByActivity[0];
+    if (!bestObj) return "";
+    if (bestObj.activity < (range.threshold ?? 0)) return "";
+    let bestVideo = bestObj.video.file;
 
     return getThumbnailURL({ file: bestVideo, maxDimension: maxDim, fast: true, retryErrors: true });
 }

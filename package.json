@@ -10,6 +10,7 @@
         "watch": "typenode ./watch.ts",
         "serve": "typenode ./serve.ts",
         "deploy": "bash deploy.sh",
+        "deploy2": "yarn build && scp -r ./build/* quentinbrooks.com:/root/new-site/dist/camera",
         "xtest": "ssh 10.0.0.189 \"cd ~/camera3 && yarn typenode ./src/alwaysRunning.ts\"",
         "test": "typenode ./test.ts",
         "start": "bash start.sh",

@@ -111,6 +111,7 @@ export class Page extends preact.Component {
                         <Button onClick={async () => {
                             this.synced.reloading = true;
                             await forceRecheckAllNow();
+                            await deleteActivityCache();
                             this.synced.reloading = false;
                         }}>
                             {this.synced.reloading ? "Checking disk..." : `Recheck ${formatNumber(getVideoIndexSynced().ranges.map(x => x.videos.length).reduce((a, b) => a + b, 0))} Files`}

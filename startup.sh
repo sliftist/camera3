@@ -1,3 +1,7 @@
+if ! mountpoint -q /media/video; then
+    pmount /dev/disk/by-label/video video
+fi
+
 screen -dmS watch
 screen -S watch -X stuff 'cd ~/camera3/ && node -r ./node_modules/typenode/index.js ./src/alwaysRunning.ts command.txt\n'
 
@@ -9,3 +13,6 @@ screen -S limit -X stuff 'cd ~/camera3/ && node -r ./node_modules/typenode/index
 
 screen -dmS activity
 screen -S activity -X stuff 'cd ~/camera3/ && node -r ./node_modules/typenode/index.js ./src/alwaysRunning.ts command4.txt\n'
+
+screen -dmS fixusb
+screen -S fixusb -X stuff 'bash ~/fixusb.sh\n'

@@ -1,11 +1,11 @@
-import { delay, runInfinitePoll } from "socket-function/src/batching";
+import { delay, runInfinitePoll, runInfinitePollCallAtStart } from "socket-function/src/batching";
 import fs from "fs";
-import { sort } from "socket-function/src/misc";
+import { sort, timeInHour } from "socket-function/src/misc";
 import { formatNumber, formatTime } from "socket-function/src/formatting/format";
 
 import { decodeVideoKey } from "./videoHelpers";
 import { videoFolder } from "./frameEmitHelpers";
-import { MAX_DISK_USAGE } from "./constants";
+import { MAX_DISK_USAGE, MAX_FILE_COUNT } from "./constants";
 import { recursiveIterate, safeUnlink, safeReadDir } from "./readHelpers";
 
 
@@ -39,24 +39,28 @@ async function limitFiles() {
 
         let totalSize = allFiles.reduce((acc, x) => acc + x.size, 0);
         let excessSize = totalSize - sizePerSpeed;
+        let excessCount = MAX_FILE_COUNT - allFiles.length;
         let filesToRemove: string[] = [];
-        while (excessSize > 0) {
+        while (excessSize > 0 || excessCount > 0) {
             let file = allFiles.pop();
             if (!file) break;
             excessSize -= file.size;
+            excessCount--;
             deletedFiles++;
             deletedBytes += file.size;
             filesToRemove.push(file.path);
         }
+
         let folderToCheck = new Set<string>();
         for (let file of filesToRemove) {
             await safeUnlink(file);
-            let dir = file.split("/").slice(0, -1).join("/") + "/";
-            while (dir.length > videoFolder.length) {
-                folderToCheck.add(dir);
-                dir = dir.split("/").slice(0, -1).join("/") + "/";
+            let path = file.split("/");
+            // Add all parent folders to folderToCheck
+            for (let i = 0; i < path.length - 1; i++) {
+                folderToCheck.add(path.slice(0, i + 1).join("/") + "/");
             }
         }
+
         // Remove empty folders, as they lag reading by quite a bit
         for (let folder of folderToCheck) {
             let files = await safeReadDir(folder);
@@ -68,7 +72,7 @@ async function limitFiles() {
         if (excessSize < 0) {
             sizePerSpeed += -excessSize / remainingSpeedFolders;
         }
-        console.log(`Finished ${speedFolder}, ${formatNumber(totalSize)}B, ${formatNumber(excessSize)}B excess`);
+        console.log(`Finished ${speedFolder}, ${formatNumber(totalSize)}B, ${formatNumber(excessSize)}B excess, ${allFiles.length} files, ${filesToRemove.length} removed`);
         console.log();
     }
 
@@ -85,6 +89,6 @@ async function limitFiles() {
 }
 
 async function main() {
-    runInfinitePoll(1000, limitFiles);
+    void runInfinitePollCallAtStart(timeInHour, limitFiles);
 }
 main().catch(e => console.error(e));

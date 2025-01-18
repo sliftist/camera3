@@ -123,6 +123,8 @@ export class VideoManager {
     private seekSeqNum = 0;
     private loadSeqNum = 0;
 
+    private videoLoadingStart: undefined | { video: string; time: number };
+
     public syncUnderlyingVideoElement(config: {
         seekToTime?: number;
         event?: string;
@@ -218,6 +220,16 @@ export class VideoManager {
                 // If the state changed abort.
                 if (this.state.targetTime !== time) return;
                 if (this.getPlayState() !== "Buffering") return;
+                if (video) {
+                    if (this.videoLoadingStart?.video !== video) {
+                        this.videoLoadingStart = { video, time: Date.now() };
+                    }
+                    if (this.videoLoadingStart && (Date.now() - this.videoLoadingStart.time) > 15_000) {
+                        // It's been loading for too long, so skip to the next video
+                        video = undefined;
+                        console.error(`Video has been loading for too long, skipping to next video`, video, nextVideo);
+                    }
+                }
                 if (video) {
                     // Surely we are just in the process of loading the video, so don't do anything
                     return;

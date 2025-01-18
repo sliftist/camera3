@@ -8,7 +8,7 @@ import { recursiveIterate } from "./readHelpers";
 import { isVideoFile, parseVideoKey, VideoFileObj } from "./videoHelpers";
 import { formatDateTime, formatTime } from "socket-function/src/formatting/format";
 import { delay, runInfinitePollCallAtStart } from "socket-function/src/batching";
-import { jpegSuffixes } from "./constants";
+import { jpegSuffixes, speedGroups } from "./constants";
 import { cache } from "socket-function/src/caching";
 
 const rootDir = "/media/video/output/";
@@ -68,7 +68,7 @@ async function exists(path: string) {
 
 async function deleteStaticVideo1x() {
     let activityRangesRaw: { start: number; end: number; path: string; }[] = [];
-    for await (let { path, size } of recursiveIterate(rootDir + "60x/")) {
+    for await (let { path, size } of recursiveIterate(rootDir + `${speedGroups[1]}x/`)) {
         if (!isVideoFile(path)) continue;
         let obj = parseVideoKey(path);
         if (!obj.startTime) continue;

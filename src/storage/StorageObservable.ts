@@ -60,7 +60,9 @@ export class StorageSync<T> implements IStorageSync<T> {
         let value = this.cached.get(key);
         if (value === undefined) {
             value = await this.storage.get(key);
-            this.cached.set(key, value);
+            if (this.cached.get(key) === undefined) {
+                this.cached.set(key, value);
+            }
         }
         return value;
     }

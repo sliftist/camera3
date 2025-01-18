@@ -4,7 +4,7 @@ import { FileStorage, getFileStorage, getFileStorageRoot } from "./storage/FileF
 import { sort, throttleFunction, timeInMinute } from "socket-function/src/misc";
 import { getDirMaximumChangeTime } from "./frameEmitHelpers";
 import { DiskCollectionPromise } from "./storage/DiskCollection";
-import { decodeVideoKey, isVideoFile, parseVideoKey, VideoFileObj } from "./videoHelpers";
+import { decodeVideoKey, deleteActivityCache, isVideoFile, parseVideoKey, VideoFileObj } from "./videoHelpers";
 import { delay, runInfinitePoll } from "socket-function/src/batching";
 import { getVideoManager } from "./VideoManager";
 import { getSpeed } from "./urlParams";

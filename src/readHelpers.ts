@@ -67,8 +67,15 @@ export async function* recursiveIterate(folder: string, minTime?: number): Async
 export async function safeUnlink(file: string) {
     await delay(10);
     try {
-        return await fs.promises.unlink(file);
-    } catch (e) {
+        if (file.endsWith("/")) {
+            await fs.promises.rmdir(file);
+        } else {
+            return await fs.promises.unlink(file);
+        }
+    } catch (e: any) {
         console.error("Error unlinking file, skipping", file, e);
+        if (e.code === "EISDIR") {
+            await fs.promises.rmdir(file);
+        }
     }
 }

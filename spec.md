@@ -2,15 +2,7 @@ todonext
 UNFIXABLE BUGS
     - sshfs is flakey, and sometimes hangs forever
         - And sometimes it just dies
-    - Sometimes /dev/video0 goes away. We can switch, but I think that video crashes as well, etc, etc, until there is nothing let by /dev/video10, which I think is an encoded, which then hangs forever.
-
-Sometimes the usb drive crashes!
-    - Maybe... add a watchdog, and if it's gone for more than 5 minutes, "sudo reboot" ?
-    - Could have been out of CMA memory. So we increased it to 64MB.
-
-
-Verify activity.ts is efficient, and uses the last used time to not re-check good activity
-
+    - Sometimes /dev/video0 goes away. We can switch, but I think that video crashes as well, etc, etc, until there is nothing let by /dev/video10, which I think is something else (not the webcam), which then hangs forever.
 
 VERSION 2
 
@@ -55,7 +47,38 @@ Maybe nice to have
     Cloud storage
         - Mostly for sped up video, which we will have a LOT less of (especially at 100X speed? Although with only keyframes maybe we need 1000X speed)
 
+Folder grid toggle
+    - In video, replace video player with a grid of images, sampled based on the playback rate
+    - And infinitely scroll up/down
+    - Can change size of grid
+        - One it gets below 4 images, we will just show a single image, and scrolling moves entirely to the next one (otherwise scrolling is annoying)
+    - Still moves trackbar, ALTHOUGH, also adds a range to the trackbar, to represent the images being shown
+        - Which, as the trackbar is relative to playback rate, means it always have a constant size on the trackbar (absent rounding), likely between 50% and 10%
+    - Hotkey navigation works
+        - Arrows is a full row, single frame is a single frame
+    - Easy toggle back to video
 
+Version 2
+    - Just a page of events
+        - Ongoing events can be watched live
+    - Time based breakdown, with cascading time selector
+        - Defaulting to show today, with activity count (both # and time) in the time selector
+    - Video player trackbar DOES NOT shot absolute time, but instead show events
+        - Size is relative to event time
+        - If events are too small, they get combined
+            - If there are too sparse, they can get enlarged with a special UI
+    - Each event has different playback rates per event
+        - With files chunking if the event is too long
+        - At a high enough playback rate we just have 1 frame
+        - IF we reduce the frame count too low, we pick high activity frames!
+    - Playback chains events together explicitly
+        - An event will always get 1 frame, no matter the playback rate
+    - Automatically choose an underlying playback rate based on the requested playback rate, so the user can just increase by 2X as long as they want, and we fudge between files with clientside playback rate, switching once we read the next file rate.
+    - AND, live view, which just shows WebRTC streamed video.
+    - ALSO, high quality and low quality video
+        - If we take a 4K picture every... 30 seconds, we can actually make a high quality video. BUT, it will be slow to load, so we don't always want that...
+    - Still have slideshow view
+        - Highlight with the event they came from
 
 
 NOTE2
@@ -111,13 +134,13 @@ sudo apt update
 sudo apt install -y screen nodejs npm gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 sudo npm install --global yarn
 
-(crontab -l 2>/dev/null; echo "@reboot /usr/bin/pmount /dev/sda1 video") | crontab -
+
 (crontab -l 2>/dev/null; echo "@reboot bash /home/quent/startup.sh") | crontab -
 echo "gpu_mem=512" | sudo tee -a /boot/firmware/config.txt
 mkdir -p /home/quent/camera3
 mkdir -p /home/quent/camera3/src
 
-sudo nmcli connection modify preconfigured ipv4.addresses 10.0.0.189/24
+sudo nmcli connection modify preconfigured ipv4.addresses 10.0.0.192/24
 sudo nmcli connection modify preconfigured ipv4.gateway 10.0.0.1
 sudo nmcli connection modify preconfigured ipv4.dns 8.8.8.8
 sudo nmcli connection modify preconfigured ipv4.method manual
@@ -126,22 +149,13 @@ sudo nmcli connection down preconfigured && sudo nmcli connection up preconfigur
 (this command "hangs", because it changes the nextwork config, so... detach after this)
 
 
-Now video is at /media/video, and the ip is 10.0.0.189, video memory is 512
+Now video is at /media/video, and the ip is 10.0.0.192, video memory is 512
 
 
 The first `bash deploy.sh` will require a manual `yarn install`
 `bash update.sh` can update the commands after that
 
-
-
-
-
-
-
-
-
-
-
+pmount LABEL=video
 
 
 mkdir -p test_folder
@@ -164,6 +178,10 @@ Hmm... I think we WEREN'T using the drive even, so... shit.
 
 pumount sda1
 pmount sda1
+
+crontab
+    @reboot /usr/bin/pmount /dev/sda1 video
+    @reboot bash /home/quent/startup.sh
 
 sudo mkfs.vfat -F 32 -s 64 /dev/sda1
 sudo chown $USER:$USER /media/sda1

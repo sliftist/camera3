@@ -41,8 +41,9 @@ async function limitFiles() {
         let excessSize = totalSize - sizePerSpeed;
         let excessCount = MAX_FILE_COUNT - allFiles.length;
         let filesToRemove: string[] = [];
+        console.log({ files: allFiles.length, totalSize, excessSize, excessCount });
         while (excessSize > 0 || excessCount > 0) {
-            let file = allFiles.pop();
+            let file = allFiles.shift();
             if (!file) break;
             excessSize -= file.size;
             excessCount--;
